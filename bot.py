@@ -21,14 +21,14 @@ from telegram.ext import (
 from calculator import (
     GameInput, ResourceInput, full_analysis, order_resources, format_duration,
     humanize_m, humanize_number, format_price,
-    try_parse_money, RESOURCE_UNITS, RESOURCE_ORDER, MARKET_BATCH_SIZE,
+    try_parse_money, try_parse_package_price, RESOURCE_UNITS, RESOURCE_ORDER, MARKET_BATCH_SIZE,
 )
 
 logging.basicConfig(level=logging.INFO)
 
-(MODE, HEALTH, DIAMONDS, WORK_TIME, PKG_DIAMONDS, PKG_PRICE,
- BONUS_YN, BONUS_RESOURCE, BONUS_VALUE,
- RESOURCE_SELECT, COLLECT_PRODUCTION, COLLECT_ALT_PRODUCTION, COLLECT_PRICE) = range(13)
+(MODE, HEALTH, DIAMONDS, PKG_DIAMONDS, PKG_PRICE,
+ RESOURCE_SELECT, BONUS_YN, BONUS_RESOURCE,
+ COLLECT_PRODUCTION, COLLECT_ALT_PRODUCTION, COLLECT_PRICE) = range(11)
 
 BIG_NUMBER_HINT = "(rəqəmi istənilən formatda yaza bilərsən: 50000, 50k, 1m, 1M, 1kkk)"
 SKIP_PRICE_KB = InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Hesablamaq istəmirəm", callback_data="skip_price")]])
@@ -50,8 +50,8 @@ def bonus_yn_keyboard():
     ])
 
 
-def bonus_resource_keyboard():
-    return InlineKeyboardMarkup([[InlineKeyboardButton(r, callback_data=f"bonusres_{r}") for r in RESOURCE_ORDER]])
+def bonus_resource_keyboard(options):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(r, callback_data=f"bonusres_{r}") for r in options]])
 
 
 def resource_select_keyboard(selected: set):
@@ -64,6 +64,10 @@ def resource_select_keyboard(selected: set):
         [InlineKeyboardButton("✅ Hamısını seç", callback_data="res_all")],
         [InlineKeyboardButton("▶️ Davam et", callback_data="res_continue")],
     ])
+
+
+def resource_label(name: str, bonus_resource_name):
+    return f"bonuslu {name}" if name == bonus_resource_name else name
 
 
 # ---------- Başlanğıc ----------
@@ -112,21 +116,8 @@ async def diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 40000 və ya 40k).")
         return DIAMONDS
     context.user_data["diamonds"] = value
-    await update.message.reply_text(
-        "1 çalışma orta hesabla neçə saniyə çəkir? (bu, ümumi çalışmanı neçə vaxta bitirəcəyini "
-        "hesablamaq üçündür - məs: 3)"
-    )
-    return WORK_TIME
-
-
-async def work_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    value = try_parse_money(update.message.text)
-    if value is None:
-        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 3).")
-        return WORK_TIME
-    context.user_data["work_seconds"] = value
     if context.user_data.get("use_existing_balance"):
-        return await ask_bonus_yn(update, context)
+        return await ask_resource_select(update, context, from_callback=False)
     await update.message.reply_text("Almaz paketində neçə 💎 var? (məs: 50000)")
     return PKG_DIAMONDS
 
@@ -137,62 +128,16 @@ async def pkg_diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 və ya 50k).")
         return PKG_DIAMONDS
     context.user_data["package_diamonds"] = value
-    await update.message.reply_text(
-        "Həmin paketin qiyməti neçə M-dir?\n"
-        "⚠️ Diqqət: paket qiyməti adətən milyonlarla olur. Əgər paketin qiyməti 120 milyondursa, "
-        "'120M' yaz. Sadəcə '120' yazsan, bu, real dəyərdən çox-çox kiçik rəqəm kimi qəbul olunar "
-        "və bütün nəticələr səhv çıxar."
-    )
+    await update.message.reply_text("Həmin paketin qiyməti neçə M-dir? (məs: 120M)")
     return PKG_PRICE
 
 
 async def pkg_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    value = try_parse_money(update.message.text)
+    value = try_parse_package_price(update.message.text)
     if value is None:
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 120M).")
         return PKG_PRICE
     context.user_data["package_price_m"] = value
-    return await ask_bonus_yn(update, context)
-
-
-# ---------- Bonus ----------
-
-async def ask_bonus_yn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bonuslu fabrikin var mı?", reply_markup=bonus_yn_keyboard())
-    return BONUS_YN
-
-
-async def bonus_yn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "bonus_yes":
-        context.user_data["bonus_active"] = True
-        await query.edit_message_text("Bonuslu fabrik hansı resurs üzrədir?", reply_markup=bonus_resource_keyboard())
-        return BONUS_RESOURCE
-    else:
-        context.user_data["bonus_active"] = False
-        context.user_data["bonus_resource"] = None
-        context.user_data["bonus_per_work"] = 0.0
-        return await ask_resource_select(update, context, from_callback=True)
-
-
-async def bonus_resource(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    resource = query.data.replace("bonusres_", "")
-    context.user_data["bonus_resource"] = resource
-    await query.edit_message_text(
-        f"{resource} fabrikində 1 çalışma başına orta hesabla nə qədər ₼ bonus qazanırsan?\n{BIG_NUMBER_HINT}"
-    )
-    return BONUS_VALUE
-
-
-async def bonus_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    value = try_parse_money(update.message.text)
-    if value is None:
-        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 20000 və ya 20k).")
-        return BONUS_VALUE
-    context.user_data["bonus_per_work"] = value
     return await ask_resource_select(update, context, from_callback=False)
 
 
@@ -223,10 +168,10 @@ async def resource_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not selected:
             await query.answer("Zəhmət olmasa ən azı 1 resurs seç.", show_alert=True)
             return RESOURCE_SELECT
-        context.user_data["queue"] = order_resources(selected)
-        context.user_data["finished_resources"] = []
-        await query.edit_message_text(f"Seçildi: {' '.join(order_resources(selected))}")
-        return await ask_next_production(update, context)
+        context.user_data["ordered_selected"] = order_resources(selected)
+        await query.edit_message_text(f"Seçildi: {' '.join(context.user_data['ordered_selected'])}")
+        await query.message.reply_text("Bonuslu fabrikin var mı?", reply_markup=bonus_yn_keyboard())
+        return BONUS_YN
     else:
         r = query.data.replace("res_toggle_", "")
         if r in selected:
@@ -236,6 +181,37 @@ async def resource_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_reply_markup(reply_markup=resource_select_keyboard(selected))
     return RESOURCE_SELECT
+
+
+# ---------- Bonus ----------
+
+async def bonus_yn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "bonus_yes":
+        context.user_data["bonus_active"] = True
+        options = context.user_data["ordered_selected"]
+        await query.edit_message_text("Bonuslu fabrik hansı resurs üzrədir?", reply_markup=bonus_resource_keyboard(options))
+        return BONUS_RESOURCE
+    else:
+        context.user_data["bonus_active"] = False
+        context.user_data["bonus_resource"] = None
+        return await start_resource_queue(update, context)
+
+
+async def bonus_resource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    resource = query.data.replace("bonusres_", "")
+    context.user_data["bonus_resource"] = resource
+    await query.edit_message_text(f"Bonuslu fabrik: {resource}")
+    return await start_resource_queue(update, context)
+
+
+async def start_resource_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["queue"] = list(context.user_data["ordered_selected"])
+    context.user_data["finished_resources"] = []
+    return await ask_next_production(update, context)
 
 
 # ---------- Resurs məlumatları (istehsal + qiymətlər) ----------
@@ -268,7 +244,7 @@ async def collect_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if is_bonus_res:
         unit = RESOURCE_UNITS.get(current, "ədəd")
         await update.message.reply_text(
-            f"Əgər bu fabrikin bonusu olmasaydı, 1 çalışmada təxminən nə qədər {unit} istehsal edərdi?\n"
+            f"Əgər bonus olmasaydı, 1 çalışmada nə qədər {unit} istehsal edə bilərsən?\n"
             "(bonuslu fabrikin, bonussuz ən yaxşı fabriklə müqayisəsi üçün lazımdır)"
         )
         return COLLECT_ALT_PRODUCTION
@@ -372,19 +348,18 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     game_input = GameInput(
         health=ud["health"], diamonds=ud["diamonds"],
-        work_seconds=ud.get("work_seconds", 0.0),
         use_existing_balance=ud.get("use_existing_balance", True),
         package_diamonds=ud.get("package_diamonds", 0.0),
         package_price_m=ud.get("package_price_m", 0.0),
         bonus_active=ud.get("bonus_active", False),
         bonus_resource_name=ud.get("bonus_resource"),
-        bonus_per_work_m=ud.get("bonus_per_work", 0.0),
         resources=ud["finished_resources"],
     )
 
     result = full_analysis(game_input)
     reports_by_name = {r["name"]: r for r in result["reports"]}
     cost_per_work = result["cost_per_work_m"]
+    bonus_resource_name = game_input.bonus_resource_name if game_input.bonus_active else None
 
     async def send(text):
         if update.callback_query:
@@ -395,9 +370,8 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     header_lines = [
         "📊 *Nəticələr*",
         f"Toplam mümkün çalışma: *{humanize_number(result['total_works'])}*",
+        f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*",
     ]
-    if result["total_duration_seconds"] > 0:
-        header_lines.append(f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*")
     if cost_per_work > 0:
         header_lines.append(f"1 çalışmanın maya dəyəri: *{humanize_m(cost_per_work)}*")
     else:
@@ -406,12 +380,11 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for r in result["reports"]:
         unit = RESOURCE_UNITS.get(r["name"], "ədəd")
-        lines = [f"{r['name']} — NƏTİCƏ", f"↳ İstehsal: {humanize_number(r['production'])} {unit}", ""]
+        label = resource_label(r["name"], bonus_resource_name)
+        lines = [f"{label} — NƏTİCƏ", f"↳ İstehsal: {humanize_number(r['production'])} {unit}", ""]
 
         if r["market_batches"] > 0:
-            lines.append(
-                f"Bazarda satmaq üçün minimum {humanize_number(r['market_batches'])} dəfə satışa qoymalısan."
-            )
+            lines.append(f"Bazarda satmaq üçün minimum {humanize_number(r['market_batches'])} dəfə satışa qoymalısan.")
             lines.append(f"(tək satışda maks {humanize_number(MARKET_BATCH_SIZE)} {unit})")
             lines.append("")
 
@@ -425,7 +398,9 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("")
         lines.append(f"↳ Xalis qazanc: {humanize_m(n['net_income_m'])}")
         if cost_per_work > 0 and n["roi_percent"] is not None:
-            lines.append(f"(ROI: {n['roi_percent']:.2f}% | Geri dönüş: {n['return_multiple']:.2f} dəfə)")
+            lines.append(f"ROI: {n['roi_percent']:.2f}%")
+            lines.append(f"Ümumi geri dönüş: {n['return_multiple']:.2f} dəfə")
+            lines.append(f"Xalis geri dönüş: {n['net_multiple']:.2f} dəfə")
         lines.append("")
 
         if "worst" in r:
@@ -439,11 +414,11 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             alt = r["alt"]
             diff = alt["diff_net_m"]
             if diff >= 0:
-                lines.append(f"🎁 Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])} "
-                              f"(bonus sənə {humanize_m(diff)} əlavə qazandırır)")
+                lines.append(f"🎁 Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
+                lines.append(f"(bonus sənə {humanize_m(diff)} əlavə qazandırır)")
             else:
-                lines.append(f"⚠️ Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])} "
-                              f"(bonus əslində {humanize_m(abs(diff))} AZ qazandırır - istehsal fərqinə görə)")
+                lines.append(f"⚠️ Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
+                lines.append(f"(bonus əslində {humanize_m(abs(diff))} AZ qazandırır - istehsal fərqinə görə)")
             lines.append("")
 
         if cost_per_work > 0:
@@ -458,28 +433,35 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = ["🏁 *Yekun tövsiyə*", ""]
     if result["best_now"]:
         best = reports_by_name[result["best_now"]]["now"]
-        summary.append(f"🏆 İndiki qiymətlərlə ən sərfəli: {result['best_now']} "
-                        f"({humanize_m(best['net_income_m'])} xalis qazanc)")
+        label = resource_label(result["best_now"], bonus_resource_name)
+        summary.append(f"🏆 İndiki qiymətlərlə ən sərfəli: {label}")
+        summary.append(f"({humanize_m(best['net_income_m'])} xalis qazanc)")
+        summary.append("")
     if result["best_worst"]:
         best = reports_by_name[result["best_worst"]]["worst"]
-        summary.append(f"🔻 Bazar durğunlaşarsa ən sərfəli: {result['best_worst']} ({humanize_m(best['net_income_m'])})")
+        label = resource_label(result["best_worst"], bonus_resource_name)
+        summary.append(f"🔻 Bazar durğunlaşarsa ən sərfəli: {label}")
+        summary.append(f"({humanize_m(best['net_income_m'])})")
+        summary.append("")
     if result["best_best"]:
         best = reports_by_name[result["best_best"]]["best"]
-        summary.append(f"🔺 Bazar hərəkətlənərsə ən sərfəli: {result['best_best']} ({humanize_m(best['net_income_m'])})")
+        label = resource_label(result["best_best"], bonus_resource_name)
+        summary.append(f"🔺 Bazar hərəkətlənərsə ən sərfəli: {label}")
+        summary.append(f"({humanize_m(best['net_income_m'])})")
+        summary.append("")
 
-    if game_input.bonus_active and game_input.bonus_resource_name in reports_by_name:
-        bonus_rep = reports_by_name[game_input.bonus_resource_name]
-        others = [r for r in result["reports"] if r["name"] != game_input.bonus_resource_name and r["has_price"]]
-        if bonus_rep["has_price"] and others:
-            best_other = max(others, key=lambda r: r["now"]["net_income_m"])
-            diff = bonus_rep["now"]["net_income_m"] - best_other["now"]["net_income_m"]
-            summary.append("")
+    if bonus_resource_name and bonus_resource_name in reports_by_name:
+        bonus_rep = reports_by_name[bonus_resource_name]
+        if "alt" in bonus_rep:
+            diff = bonus_rep["alt"]["diff_net_m"]
             if diff >= 0:
-                summary.append(f"🎁 Bonuslu fabrikin ({game_input.bonus_resource_name}) ən yaxşı adi fabrikdən "
-                                f"({best_other['name']}) {humanize_m(diff)} çox qazandırır.")
+                summary.append(f"Bonuslu {bonus_resource_name} fabriki")
+                summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
+                summary.append(f"{humanize_m(diff)} çox qazandırır.")
             else:
-                summary.append(f"⚠️ Bonuslu fabrikin ({game_input.bonus_resource_name}) hələ də "
-                                f"{best_other['name']} fabrikindən {humanize_m(abs(diff))} az qazandırır.")
+                summary.append(f"Bonuslu {bonus_resource_name} fabriki")
+                summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
+                summary.append(f"{humanize_m(abs(diff))} AZ qazandırır.")
 
     await send("\n".join(summary))
 
@@ -528,13 +510,11 @@ def main():
             MODE: [CallbackQueryHandler(mode_choice, pattern="^mode_")],
             HEALTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, health)],
             DIAMONDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, diamonds)],
-            WORK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, work_time)],
             PKG_DIAMONDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_diamonds)],
             PKG_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_price)],
+            RESOURCE_SELECT: [CallbackQueryHandler(resource_toggle, pattern="^res_")],
             BONUS_YN: [CallbackQueryHandler(bonus_yn, pattern="^bonus_")],
             BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_")],
-            BONUS_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bonus_value)],
-            RESOURCE_SELECT: [CallbackQueryHandler(resource_toggle, pattern="^res_")],
             COLLECT_PRODUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_production)],
             COLLECT_ALT_PRODUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_alt_production)],
             COLLECT_PRICE: [

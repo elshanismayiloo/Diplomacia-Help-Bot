@@ -6,10 +6,9 @@ Oyun mexanikası:
 - 1 çalışma = 100 enerji (sağlıq həbi), bunun 5-i pulsuz regenerasiya olunur
   -> faktiki xərc 95 sağlıq həbi (💊).
 - 💊 -> 💎 nisbəti: 5 💊 = 1 💎 (yəni 95 💊 = 19 💎).
-- Almaz paketi: X 💎 = Y M. Paket qiyməti ADƏTƏN milyonlarladır - istifadəçi
-  bunu "120M" kimi (M şəkilçisi ilə) yazmalıdır, sadəcə "120" yazsa, bu, real
-  dəyərdən qat-qat kiçik rəqəm kimi qəbul olunar və bütün hesablamalar səhv
-  çıxar. Bu bot səviyyəsində diqqətli mesajlaşma ilə qarşısı alınır.
+- Hər 10 dəqiqədə 1 dəfə çalışmaq mümkündür (sabit interval).
+- Almaz paketi: X 💎 = Y M. Paket qiymətləri adətən milyonlarladır - "120"
+  yazsan, bu, avtomatik 120 milyon kimi qəbul olunur.
 - Bazarda 1 dəfəyə maksimum 20 000 ədəd/barrel satıla bilər.
 """
 
@@ -22,6 +21,7 @@ FREE_REGEN_PER_WORK = 5
 NET_ENERGY_COST = ENERGY_PER_WORK - FREE_REGEN_PER_WORK  # 95
 HEALTH_TO_DIAMOND_RATE = 5  # 5 💊 = 1 💎
 MARKET_BATCH_SIZE = 20000   # bazarda 1 dəfəyə satıla bilən maksimum miqdar
+WORK_INTERVAL_SECONDS = 600  # hər 10 dəqiqədə 1 çalışma
 
 RESOURCE_ORDER = ["🦌", "🪙", "🛢", "⚗️"]
 RESOURCE_UNITS = {
@@ -33,7 +33,6 @@ RESOURCE_UNITS = {
 
 
 def order_resources(resources):
-    """Verilmiş resurs siyahısını/setini sabit RESOURCE_ORDER sırasına salır."""
     return [r for r in RESOURCE_ORDER if r in resources]
 
 
@@ -44,8 +43,7 @@ class ResourceInput:
     price_now: Optional[float] = None
     price_worst: Optional[float] = None
     price_best: Optional[float] = None
-    # Yalnız bonuslu resurs üçün: bonus olmasaydı istehsalın nə qədər olacağı
-    # (müqayisə məqsədilə).
+    # Yalnız bonuslu resurs üçün: bonus olmasaydı istehsalın nə qədər olacağı.
     alt_production_per_work: Optional[float] = None
 
 
@@ -53,13 +51,11 @@ class ResourceInput:
 class GameInput:
     health: float
     diamonds: float
-    work_seconds: float = 0.0            # 1 çalışmanın orta çəkdiyi vaxt (saniyə)
     use_existing_balance: bool = True
     package_diamonds: float = 0.0
     package_price_m: float = 0.0
     bonus_active: bool = False
     bonus_resource_name: Optional[str] = None
-    bonus_per_work_m: float = 0.0
     resources: list = field(default_factory=list)  # list[ResourceInput]
 
 
@@ -73,7 +69,6 @@ def diamond_cost_per_work() -> float:
 
 
 def work_cost_in_m(package_diamonds: float, package_price_m: float) -> float:
-    """1 çalışmanın M-lə maya dəyəri, paket qiymətinə əsasən."""
     if package_diamonds <= 0:
         return 0.0
     diamond_price_m = package_price_m / package_diamonds
@@ -87,7 +82,6 @@ def market_batches_needed(production: float, batch_size: float = MARKET_BATCH_SI
 
 
 def format_duration(total_seconds: float) -> str:
-    """Saniyəni 'X gün, Y saat, Z dəqiqə' formatına çevirir."""
     total_seconds = max(0, int(round(total_seconds)))
     days, rem = divmod(total_seconds, 86400)
     hours, rem = divmod(rem, 3600)
@@ -105,38 +99,41 @@ def format_duration(total_seconds: float) -> str:
 
 
 def roi_percent(net_income_m: float, cost_m: float) -> Optional[float]:
-    """Neçə faiz qazanc əldə edilib (maya dəyərinə nisbətən)."""
     if cost_m <= 0:
         return None
     return (net_income_m / cost_m) * 100
 
 
 def return_multiple(gross_income_m: float, cost_m: float) -> Optional[float]:
-    """Qoyulan pulun neçə dəfəyə qayıtdığı (ümumi gəlir / maya dəyəri)."""
+    """Ümumi geri dönüş: bütün gəlirin maya dəyərinə nisbəti."""
     if cost_m <= 0:
         return None
     return gross_income_m / cost_m
 
 
+def net_multiple(net_income_m: float, cost_m: float) -> Optional[float]:
+    """Xalis geri dönüş: xalis qazancın maya dəyərinə nisbəti."""
+    if cost_m <= 0:
+        return None
+    return net_income_m / cost_m
+
+
 def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
-                     bonus_active: bool, bonus_resource_name: Optional[str], bonus_per_work_m: float):
+                     bonus_active: bool, bonus_resource_name: Optional[str]):
     production = round(resource.production_per_work * works, 2)
     is_bonus = bonus_active and resource.name == bonus_resource_name
     total_cost = round(cost_per_work_m * works, 2)
 
-    def calc_for_price(price, prod, bonus_income_value):
-        gross_revenue = prod * price
-        gross_income = gross_revenue + bonus_income_value
+    def calc_for_price(price, prod):
+        gross_income = prod * price
         net_income = gross_income - total_cost
         return {
             "gross_income_m": round(gross_income, 2),
-            "bonus_income_m": round(bonus_income_value, 2),
             "net_income_m": round(net_income, 2),
             "roi_percent": roi_percent(net_income, total_cost),
             "return_multiple": return_multiple(gross_income, total_cost),
+            "net_multiple": net_multiple(net_income, total_cost),
         }
-
-    bonus_income = works * bonus_per_work_m if is_bonus else 0.0
 
     result = {
         "name": resource.name,
@@ -147,15 +144,15 @@ def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
         "total_cost_m": total_cost,
     }
     if resource.price_now is not None:
-        result["now"] = calc_for_price(resource.price_now, production, bonus_income)
+        result["now"] = calc_for_price(resource.price_now, production)
         if resource.price_worst is not None:
-            result["worst"] = calc_for_price(resource.price_worst, production, bonus_income)
+            result["worst"] = calc_for_price(resource.price_worst, production)
         if resource.price_best is not None:
-            result["best"] = calc_for_price(resource.price_best, production, bonus_income)
+            result["best"] = calc_for_price(resource.price_best, production)
 
         if is_bonus and resource.alt_production_per_work is not None:
             alt_production = round(resource.alt_production_per_work * works, 2)
-            alt_now = calc_for_price(resource.price_now, alt_production, 0.0)
+            alt_now = calc_for_price(resource.price_now, alt_production)
             result["alt"] = {
                 "production": alt_production,
                 "now": alt_now,
@@ -166,7 +163,6 @@ def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
 
 
 def minimal_sale_price(cost_per_work_m: float, production_per_work: float) -> Optional[float]:
-    """Zərər etməmək üçün lazım olan minimal satış qiyməti (vahid başına)."""
     if cost_per_work_m <= 0 or production_per_work <= 0:
         return None
     return cost_per_work_m / production_per_work
@@ -180,7 +176,6 @@ def parse_money(text: str) -> float:
       "1kkk"   -> 1000000.0      ("kkk" ardıcıllığı "M" ilə eynidir)
       "1m/1M"  -> 1000000.0
       "1.5k"   -> 1500.0
-    ValueError qaldırır, əgər mətn rəqəmə çevrilə bilmirsə.
     """
     t = text.strip().lower().replace(" ", "")
     if not t:
@@ -205,6 +200,27 @@ def try_parse_money(text: str) -> Optional[float]:
         return None
 
 
+def parse_package_price(text: str) -> float:
+    """Paket qiyməti üçün xüsusi parser: şəkilçi (k/m/M/kkk) yazılmayıbsa,
+    dəyər avtomatik milyon kimi qəbul olunur (paket qiymətləri adətən
+    milyonlarla olur), çünki "120" yazan istifadəçi "120M" nəzərdə tutur."""
+    t = text.strip().lower().replace(" ", "")
+    if not t:
+        raise ValueError("boş mətn")
+    has_suffix = t.endswith("m") or t.endswith("k") or "kkk" in t
+    value = parse_money(text)
+    if not has_suffix:
+        value *= 1_000_000.0
+    return value
+
+
+def try_parse_package_price(text: str) -> Optional[float]:
+    try:
+        return parse_package_price(text)
+    except (ValueError, TypeError):
+        return None
+
+
 def humanize_m(value: float) -> str:
     sign = "-" if value < 0 else ""
     v = abs(value)
@@ -224,7 +240,6 @@ def humanize_number(value: float) -> str:
 
 
 def format_price(value: Optional[float]) -> str:
-    """Kiçik qiymətləri (Minimal satış qiyməti kimi) k/M olmadan göstərir."""
     if value is None:
         return "tətbiq olunmur"
     if value == 0:
@@ -246,8 +261,7 @@ def full_analysis(game_input: GameInput):
     reports = []
     for res in game_input.resources:
         rep = resource_report(res, works, cost_per_work,
-                               game_input.bonus_active, game_input.bonus_resource_name,
-                               game_input.bonus_per_work_m)
+                               game_input.bonus_active, game_input.bonus_resource_name)
         rep["min_sale_price"] = minimal_sale_price(cost_per_work, res.production_per_work)
         reports.append(rep)
 
@@ -263,7 +277,7 @@ def full_analysis(game_input: GameInput):
     best_worst = best_for("worst")
     best_best = best_for("best")
 
-    total_seconds = works * game_input.work_seconds if game_input.work_seconds > 0 else 0
+    total_seconds = works * WORK_INTERVAL_SECONDS
 
     return {
         "total_works": works,
