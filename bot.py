@@ -75,10 +75,13 @@ def resource_label(name: str, bonus_resource_name):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = (
-        "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
-        "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n"
-        f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: \n\n"
-        f"50000, 50k, 1m, 1M, 1kkk.\n\n"
+        "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n",
+        lines.append(""),
+        "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n",
+        lines.append(""),
+        f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: \n\n",
+        f"50000, 50k, 1m, 1M, 1kkk.\n\n",
+        lines.append(""),
         "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
@@ -125,7 +128,7 @@ async def diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pkg_diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = try_parse_money(update.message.text)
     if value is None:
-        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 və ya 50k).")
+        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 ya 50k).")
         return PKG_DIAMONDS
     context.user_data["package_diamonds"] = value
     await update.message.reply_text("Həmin paketin qiyməti neçə M-dir? (məs: 120 və ya 120M)")
@@ -267,7 +270,7 @@ async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["current_alt_production"] = value
     context.user_data["price_step"] = 0
     await update.message.reply_text(
-        "İndiki bazar qiyməti neçədir?\n"
+        "İndiki bazar qiyməti neçədir?\n",
         lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
         reply_markup=SKIP_PRICE_KB,
     )
@@ -284,7 +287,7 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["current_price_now"] = value
         context.user_data["price_step"] = 1
         await reply_text(
-            "Bazar durğunlaşarsa minimum qiymət nə qədər olar?\n"
+            "Bazar durğunlaşarsa minimum qiymət nə qədər olar?\n",
             lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
             reply_markup=SKIP_PRICE_KB,
         )
@@ -294,7 +297,7 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["current_price_worst"] = None if value == 0 else value
         context.user_data["price_step"] = 2
         await reply_text(
-            "Bazar hərəkətlənərsə maksimum qiymət nə qədər olar?\n"
+            "Bazar hərəkətlənərsə maksimum qiymət nə qədər olar?\n",
             lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
             reply_markup=SKIP_PRICE_KB,
         )
