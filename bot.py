@@ -252,7 +252,8 @@ async def collect_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["price_step"] = 0
     await update.message.reply_text(
         "İndiki bazar qiyməti neçədir?\n"
-        lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
+        lines.append("")
+        f"(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
         reply_markup=SKIP_PRICE_KB,
     )
     return COLLECT_PRICE
