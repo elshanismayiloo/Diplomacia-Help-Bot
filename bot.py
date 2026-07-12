@@ -75,13 +75,10 @@ def resource_label(name: str, bonus_resource_name):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = (
-        "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n",
-        lines.append(""),
-        "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n",
-        lines.append(""),
-        f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: \n\n",
-        f"50000, 50k, 1m, 1M, 1kkk.\n\n",
-        lines.append(""),
+        "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
+        "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n"
+        f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: "
+        f"50000, 50k, 1m, 1M, 1kkk kimi.\n\n"
         "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
@@ -110,7 +107,7 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return HEALTH
     context.user_data["health"] = value
     await update.message.reply_text("Cari 💎 (almaz) balansın neçədir?")
-    return DIAMODS
+    return DIAMONDS
 
 
 async def diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,24 +118,24 @@ async def diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["diamonds"] = value
     if context.user_data.get("use_existing_balance"):
         return await ask_resource_select(update, context, from_callback=False)
-    await update.message.reply_text("Almaz paketində neçə 💎 var? (məs: 50000 və ya 50k)")
+    await update.message.reply_text("Almaz paketində neçə 💎 var? (məs: 50000)")
     return PKG_DIAMONDS
 
 
 async def pkg_diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = try_parse_money(update.message.text)
     if value is None:
-        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 ya 50k).")
+        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 və ya 50k).")
         return PKG_DIAMONDS
     context.user_data["package_diamonds"] = value
-    await update.message.reply_text("Həmin paketin qiyməti neçə M-dir? (məs: 120 və ya 120M)")
+    await update.message.reply_text("Həmin paketin qiyməti neçə M-dir? (məs: 120M)")
     return PKG_PRICE
 
 
 async def pkg_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = try_parse_package_price(update.message.text)
     if value is None:
-        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 120 və ya 120M).")
+        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 120M).")
         return PKG_PRICE
     context.user_data["package_price_m"] = value
     return await ask_resource_select(update, context, from_callback=False)
@@ -173,7 +170,7 @@ async def resource_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return RESOURCE_SELECT
         context.user_data["ordered_selected"] = order_resources(selected)
         await query.edit_message_text(f"Seçildi: {' '.join(context.user_data['ordered_selected'])}")
-        await query.message.reply_text("Bonuslu fabrik var?", reply_markup=bonus_yn_keyboard())
+        await query.message.reply_text("Bonuslu fabrikin var mı?", reply_markup=bonus_yn_keyboard())
         return BONUS_YN
     else:
         r = query.data.replace("res_toggle_", "")
@@ -247,16 +244,14 @@ async def collect_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if is_bonus_res:
         unit = RESOURCE_UNITS.get(current, "ədəd")
         await update.message.reply_text(
-            f"Əgər bonuslu fabrik olmasaydı, 1 çalışmada ən çox nə qədər {unit} istehsal olunardı?\n"
+            f"Əgər bonus olmasaydı, 1 çalışmada nə qədər {unit} istehsal edə bilərsən?\n"
             "(bonuslu fabrikin, bonussuz ən yaxşı fabriklə müqayisəsi üçün lazımdır)"
         )
         return COLLECT_ALT_PRODUCTION
 
     context.user_data["price_step"] = 0
     await update.message.reply_text(
-        "İndiki bazar qiyməti neçədir?\n",
-        lines.append(""),
-        f"(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
+        "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
         reply_markup=SKIP_PRICE_KB,
     )
     return COLLECT_PRICE
@@ -270,8 +265,7 @@ async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data["current_alt_production"] = value
     context.user_data["price_step"] = 0
     await update.message.reply_text(
-        "İndiki bazar qiyməti neçədir?\n",
-        lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
+        "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
         reply_markup=SKIP_PRICE_KB,
     )
     return COLLECT_PRICE
@@ -287,8 +281,7 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["current_price_now"] = value
         context.user_data["price_step"] = 1
         await reply_text(
-            "Bazar durğunlaşarsa minimum qiymət nə qədər olar?\n",
-            lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
+            "Bazar durğunlaşarsa minimum qiymət nə qədər olar?\n(hesablamaq istəmirsənsə aşağıdakı düyməni bas)",
             reply_markup=SKIP_PRICE_KB,
         )
         return COLLECT_PRICE
@@ -297,8 +290,7 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["current_price_worst"] = None if value == 0 else value
         context.user_data["price_step"] = 2
         await reply_text(
-            "Bazar hərəkətlənərsə maksimum qiymət nə qədər olar?\n",
-            lines.append("(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"),
+            "Bazar hərəkətlənərsə maksimum qiymət nə qədər olar?\n(hesablamaq istəmirsənsə aşağıdakı düyməni bas)",
             reply_markup=SKIP_PRICE_KB,
         )
         return COLLECT_PRICE
@@ -377,7 +369,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     header_lines = [
         "📊 *Nəticələr*",
-        f"Çalışma sayı: *{humanize_number(result['total_works'])}*",
+        f"Toplam mümkün çalışma: *{humanize_number(result['total_works'])}*",
         f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*",
     ]
     if cost_per_work > 0:
@@ -423,10 +415,10 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             diff = alt["diff_net_m"]
             if diff >= 0:
                 lines.append(f"🎁 Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
-                lines.append(f"(bonus sənə {humanize_m(diff)} ₼ əlavə qazandırır)")
+                lines.append(f"(bonus sənə {humanize_m(diff)} əlavə qazandırır)")
             else:
                 lines.append(f"⚠️ Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
-                lines.append(f"(bonus əslində {humanize_m(abs(diff))} ₼ qazandırır - istehsal fərqinə görə)")
+                lines.append(f"(bonus əslində {humanize_m(abs(diff))} AZ qazandırır - istehsal fərqinə görə)")
             lines.append("")
 
         if cost_per_work > 0:
@@ -465,11 +457,11 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if diff >= 0:
                 summary.append(f"Bonuslu {bonus_resource_name} fabriki")
                 summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(diff)} ₼ çox qazandırır.")
+                summary.append(f"{humanize_m(diff)} çox qazandırır.")
             else:
                 summary.append(f"Bonuslu {bonus_resource_name} fabriki")
                 summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(abs(diff))} ₼ qazandırır.")
+                summary.append(f"{humanize_m(abs(diff))} AZ qazandırır.")
 
     await send("\n".join(summary))
 
