@@ -81,7 +81,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(""),
         f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: \n\n",
         f"50000, 50k, 1m, 1M, 1kkk.\n\n",
-        lines.append("")
+        lines.append(""),
         "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
