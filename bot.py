@@ -76,12 +76,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = (
         "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
-        summary.append("")
+        lines.append("")
         "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n"
-        summary.append("")
+        lines.append("")
         f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: "
         f"50000, 50k, 1m, 1M, 1kkk kimi.\n\n"
-        summary.append("")
+        lines.append("")
         "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
