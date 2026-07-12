@@ -75,11 +75,14 @@ def resource_label(name: str, bonus_resource_name):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = (
-        f"Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
-        lines.append("İstənilən vaxt /cancel ilə dayandıra bilərsən.\n")
-        lines.append(f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: \n")
-        f"50000, 50k, 1m, 1M, 1kkk.\n\n"
-        lines.append("Necə hesablamaq istəyirsən?")
+        "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
+        summary.append("")
+        "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n"
+        summary.append("")
+        f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: "
+        f"50000, 50k, 1m, 1M, 1kkk kimi.\n\n"
+        summary.append("")
+        "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
         await update.callback_query.answer()
