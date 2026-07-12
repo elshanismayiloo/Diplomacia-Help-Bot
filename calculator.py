@@ -56,6 +56,7 @@ class GameInput:
     package_price_m: float = 0.0
     bonus_active: bool = False
     bonus_resource_name: Optional[str] = None
+    bonus_per_work_m: float = 0.0   # bonuslu fabrikdə 1 çalışma başına əlavə ₼ (istehsaldan asılı olmayaraq)
     resources: list = field(default_factory=list)  # list[ResourceInput]
 
 
@@ -119,16 +120,18 @@ def net_multiple(net_income_m: float, cost_m: float) -> Optional[float]:
 
 
 def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
-                     bonus_active: bool, bonus_resource_name: Optional[str]):
+                     bonus_active: bool, bonus_resource_name: Optional[str], bonus_per_work_m: float):
     production = round(resource.production_per_work * works, 2)
     is_bonus = bonus_active and resource.name == bonus_resource_name
     total_cost = round(cost_per_work_m * works, 2)
+    bonus_income = works * bonus_per_work_m if is_bonus else 0.0
 
-    def calc_for_price(price, prod):
-        gross_income = prod * price
+    def calc_for_price(price, prod, include_bonus=False):
+        gross_income = prod * price + (bonus_income if include_bonus else 0.0)
         net_income = gross_income - total_cost
         return {
             "gross_income_m": round(gross_income, 2),
+            "bonus_income_m": round(bonus_income if include_bonus else 0.0, 2),
             "net_income_m": round(net_income, 2),
             "roi_percent": roi_percent(net_income, total_cost),
             "return_multiple": return_multiple(gross_income, total_cost),
@@ -144,15 +147,16 @@ def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
         "total_cost_m": total_cost,
     }
     if resource.price_now is not None:
-        result["now"] = calc_for_price(resource.price_now, production)
+        result["now"] = calc_for_price(resource.price_now, production, include_bonus=True)
         if resource.price_worst is not None:
-            result["worst"] = calc_for_price(resource.price_worst, production)
+            result["worst"] = calc_for_price(resource.price_worst, production, include_bonus=True)
         if resource.price_best is not None:
-            result["best"] = calc_for_price(resource.price_best, production)
+            result["best"] = calc_for_price(resource.price_best, production, include_bonus=True)
 
         if is_bonus and resource.alt_production_per_work is not None:
+            # Bonus olmasaydı: nə əlavə istehsal, nə də əlavə ₼ bonusu olmazdı.
             alt_production = round(resource.alt_production_per_work * works, 2)
-            alt_now = calc_for_price(resource.price_now, alt_production)
+            alt_now = calc_for_price(resource.price_now, alt_production, include_bonus=False)
             result["alt"] = {
                 "production": alt_production,
                 "now": alt_now,
@@ -261,7 +265,8 @@ def full_analysis(game_input: GameInput):
     reports = []
     for res in game_input.resources:
         rep = resource_report(res, works, cost_per_work,
-                               game_input.bonus_active, game_input.bonus_resource_name)
+                               game_input.bonus_active, game_input.bonus_resource_name,
+                               game_input.bonus_per_work_m)
         rep["min_sale_price"] = minimal_sale_price(cost_per_work, res.production_per_work)
         reports.append(rep)
 

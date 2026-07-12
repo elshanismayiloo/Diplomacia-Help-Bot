@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO)
 
 (MODE, HEALTH, DIAMONDS, PKG_DIAMONDS, PKG_PRICE,
  RESOURCE_SELECT, BONUS_YN, BONUS_RESOURCE,
- COLLECT_PRODUCTION, COLLECT_ALT_PRODUCTION, COLLECT_PRICE) = range(11)
+ COLLECT_PRODUCTION, COLLECT_ALT_PRODUCTION, BONUS_VALUE, COLLECT_PRICE) = range(12)
 
 BIG_NUMBER_HINT = "(rəqəmi istənilən formatda yaza bilərsən: 50000, 50k, 1m, 1M, 1kkk)"
 SKIP_PRICE_KB = InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Hesablamaq istəmirəm", callback_data="skip_price")]])
@@ -263,6 +263,19 @@ async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz.")
         return COLLECT_ALT_PRODUCTION
     context.user_data["current_alt_production"] = value
+    await update.message.reply_text(
+        f"Bonuslu fabrikdə 1 çalışma başına, istehsaldan əlavə, orta hesabla nə qədər ₼ bonus qazanırsan?\n"
+        f"{BIG_NUMBER_HINT}"
+    )
+    return BONUS_VALUE
+
+
+async def bonus_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    value = try_parse_money(update.message.text)
+    if value is None:
+        await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 20000 və ya 20k).")
+        return BONUS_VALUE
+    context.user_data["bonus_per_work"] = value
     context.user_data["price_step"] = 0
     await update.message.reply_text(
         "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
@@ -353,6 +366,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         package_price_m=ud.get("package_price_m", 0.0),
         bonus_active=ud.get("bonus_active", False),
         bonus_resource_name=ud.get("bonus_resource"),
+        bonus_per_work_m=ud.get("bonus_per_work", 0.0),
         resources=ud["finished_resources"],
     )
 
@@ -369,7 +383,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     header_lines = [
         "📊 *Nəticələr*",
-        f"Mümkün çalışma sayı: *{humanize_number(result['total_works'])}*",
+        f"Toplam mümkün çalışma: *{humanize_number(result['total_works'])}*",
         f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*",
     ]
     if cost_per_work > 0:
@@ -415,10 +429,10 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             diff = alt["diff_net_m"]
             if diff >= 0:
                 lines.append(f"🎁 Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
-                lines.append(f"(bonus sənə {humanize_m(diff)} ₼ əlavə qazandırır)")
+                lines.append(f"(bonus sənə {humanize_m(diff)} əlavə qazandırır)")
             else:
                 lines.append(f"⚠️ Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
-                lines.append(f"(bonus əslində {humanize_m(abs(diff))} ₼ qazandırır - istehsal fərqinə görə)")
+                lines.append(f"(bonus əslində {humanize_m(abs(diff))} qazandırır - istehsal fərqinə görə)")
             lines.append("")
 
         if cost_per_work > 0:
@@ -434,7 +448,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["best_now"]:
         best = reports_by_name[result["best_now"]]["now"]
         label = resource_label(result["best_now"], bonus_resource_name)
-        summary.append(f"İndiki qiymətlərlə ən sərfəli: {label}")
+        summary.append(f"🏆 İndiki qiymətlərlə ən sərfəli: {label}")
         summary.append(f"({humanize_m(best['net_income_m'])} xalis qazanc)")
         summary.append("")
     if result["best_worst"]:
@@ -457,11 +471,11 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if diff >= 0:
                 summary.append(f"Bonuslu {bonus_resource_name} fabriki")
                 summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(diff)} ₼ çox qazandırır.")
+                summary.append(f"{humanize_m(diff)} çox qazandırır.")
             else:
                 summary.append(f"Bonuslu {bonus_resource_name} fabriki")
                 summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(abs(diff))} ₼ qazandırır.")
+                summary.append(f"{humanize_m(abs(diff))} qazandırır.")
 
     await send("\n".join(summary))
 
@@ -517,6 +531,7 @@ def main():
             BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_")],
             COLLECT_PRODUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_production)],
             COLLECT_ALT_PRODUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_alt_production)],
+            BONUS_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bonus_value)],
             COLLECT_PRICE: [
                 CallbackQueryHandler(skip_price_callback, pattern="^skip_price$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_price),
