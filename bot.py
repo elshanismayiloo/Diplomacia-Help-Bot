@@ -78,7 +78,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
         "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n"
         f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: "
-        f"50000, 50k, 1m, 1M, 1kkk kimi.\n\n"
+        f"50000, 50k, 1m, 1M, 1kkk.\n\n"
         "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
@@ -369,7 +369,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     header_lines = [
         "📊 *Nəticələr*",
-        f"Toplam mümkün çalışma: *{humanize_number(result['total_works'])}*",
+        f"Mümkün çalışma sayı: *{humanize_number(result['total_works'])}*",
         f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*",
     ]
     if cost_per_work > 0:
@@ -415,10 +415,10 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             diff = alt["diff_net_m"]
             if diff >= 0:
                 lines.append(f"🎁 Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
-                lines.append(f"(bonus sənə {humanize_m(diff)} əlavə qazandırır)")
+                lines.append(f"(bonus sənə {humanize_m(diff)} ₼ əlavə qazandırır)")
             else:
                 lines.append(f"⚠️ Bonus olmasaydı: {humanize_m(alt['now']['net_income_m'])}")
-                lines.append(f"(bonus əslində {humanize_m(abs(diff))} AZ qazandırır - istehsal fərqinə görə)")
+                lines.append(f"(bonus əslində {humanize_m(abs(diff))} ₼ qazandırır - istehsal fərqinə görə)")
             lines.append("")
 
         if cost_per_work > 0:
@@ -434,7 +434,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result["best_now"]:
         best = reports_by_name[result["best_now"]]["now"]
         label = resource_label(result["best_now"], bonus_resource_name)
-        summary.append(f"🏆 İndiki qiymətlərlə ən sərfəli: {label}")
+        summary.append(f"İndiki qiymətlərlə ən sərfəli: {label}")
         summary.append(f"({humanize_m(best['net_income_m'])} xalis qazanc)")
         summary.append("")
     if result["best_worst"]:
@@ -457,11 +457,11 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if diff >= 0:
                 summary.append(f"Bonuslu {bonus_resource_name} fabriki")
                 summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(diff)} çox qazandırır.")
+                summary.append(f"{humanize_m(diff)} ₼ çox qazandırır.")
             else:
                 summary.append(f"Bonuslu {bonus_resource_name} fabriki")
                 summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(abs(diff))} AZ qazandırır.")
+                summary.append(f"{humanize_m(abs(diff))} ₼ qazandırır.")
 
     await send("\n".join(summary))
 
