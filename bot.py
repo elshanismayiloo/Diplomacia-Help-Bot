@@ -13,7 +13,7 @@ import asyncio
 import logging
 from telegram import (
     Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
+    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, MenuButtonCommands,
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ConversationHandler,
@@ -75,7 +75,7 @@ def resource_label(name: str, bonus_resource_name):
 
 def commands_keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("/start"), KeyboardButton("/help"), KeyboardButton("/cancel")]],
+        [[KeyboardButton("/start 🚀 Başla"), KeyboardButton("/help ❓ Kömək"), KeyboardButton("/cancel ❌ Ləğv et")]],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -537,10 +537,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(app):
     await app.bot.set_my_commands([
-        BotCommand("start", "Hesablamanı başlat"),
-        BotCommand("help", "Necə etməli? (təlimat)"),
-        BotCommand("cancel", "Cari hesablamanı ləğv et"),
+        BotCommand("start", "🚀 Hesablamanı başlat"),
+        BotCommand("help", "❓ Necə etməli? (təlimat)"),
+        BotCommand("cancel", "❌ Cari hesablamanı ləğv et"),
     ])
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     help_url = await asyncio.to_thread(telegraph_setup.get_or_create_help_url)
     app.bot_data["help_url"] = help_url
 
