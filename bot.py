@@ -9,17 +9,19 @@ Diplomacia Profit Calculator - Telegram Bot
 """
 
 import os
+import re
 import asyncio
 import logging
+
 from telegram import (
     Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, MenuButtonCommands,
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ConversationHandler,
-    MessageHandler, CallbackQueryHandler, ContextTypes, filters
+    MessageHandler, CallbackQueryHandler, ContextTypes, filters,
+    PicklePersistence,
 )
-
 from calculator import (
     GameInput, ResourceInput, full_analysis, order_resources, format_duration,
     humanize_m, humanize_number, format_price,
@@ -35,6 +37,17 @@ logging.basicConfig(level=logging.INFO)
 
 BIG_NUMBER_HINT = "(rəqəmi istənilən formatda yaza bilərsən: 50000, 50k, 1m, 1M, 1kkk)"
 SKIP_PRICE_KB = InlineKeyboardMarkup([[InlineKeyboardButton("⏭ Hesablamaq istəmirəm", callback_data="skip_price")]])
+
+# Alt (aşağı) klaviatura düymələrinin göstərilən mətni. İstifadəçi bu mətni
+# görür və klikləyir, bot isə arxa planda uyğun /əmr funksiyasını çağırır -
+# istifadəçi çılpaq "/start" kimi mətn görmür.
+BTN_START = "🚀 Başla"
+BTN_HELP = "❓ Kömək"
+BTN_CANCEL = "❌ Ləğv et"
+
+# İstifadəçi profilinin user_data içindəki açarı. Bu açar `start()`-da
+# user_data təmizlənərkən qorunur ki, əvvəlki balans/istehsal rəqəmləri itməsin.
+PROFILE_KEY = "profile"
 
 
 # ---------- Klaviaturalar ----------
@@ -75,16 +88,40 @@ def resource_label(name: str, bonus_resource_name):
 
 def commands_keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("/start 🚀 Başla"), KeyboardButton("/help ❓ Kömək"), KeyboardButton("/cancel ❌ Ləğv et")]],
+        [[KeyboardButton(BTN_START), KeyboardButton(BTN_HELP), KeyboardButton(BTN_CANCEL)]],
         resize_keyboard=True,
         is_persistent=True,
     )
 
 
+def prev_value_keyboard(value_text: str, use_callback: str, new_callback: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"✅ Əvvəlki: {value_text}", callback_data=use_callback)],
+        [InlineKeyboardButton("✏️ Yeni yaz", callback_data=new_callback)],
+    ])
+
+
+def nav_handlers():
+    """Söhbətin istənilən mərhələsində "🚀 Başla" / "❌ Ləğv et" alt-düymələrini
+    dərhal tanıyıb uyğun funksiyaya yönləndirən handler-lər. Hər mətn-gözləyən
+    addımın handler siyahısının başına əlavə edilməlidir ki, ümumi mətn
+    handler-i bu düymələrin mətnini "rəqəm" kimi qəbul edib xəta verməsin."""
+    return [
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_START)}$"), start),
+        MessageHandler(filters.Regex(f"^{re.escape(BTN_CANCEL)}$"), cancel),
+    ]
+
+
 # ---------- Başlanğıc ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Profili qoruyub qalan hər şeyi təmizləyirik ki, köhnə cavablar yeni
+    # hesablamaya qarışmasın, amma yadda saxlanan balans/istehsal itməsin.
+    profile = context.user_data.get(PROFILE_KEY)
     context.user_data.clear()
+    if profile:
+        context.user_data[PROFILE_KEY] = profile
+
     text = (
         "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
         "İstənilən vaxt /cancel ilə dayandıra bilərsən. Lazımi rəqəmləri oyunda necə "
@@ -96,7 +133,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.message.reply_text(text, reply_markup=mode_keyboard())
-    else:
+    elif update.message:
         await update.message.reply_text(text, reply_markup=commands_keyboard())
         await update.message.reply_text("Seçim et:", reply_markup=mode_keyboard())
     return MODE
@@ -106,11 +143,53 @@ async def mode_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["use_existing_balance"] = (query.data == "mode_balance")
+
+    saved_balance = context.user_data.get(PROFILE_KEY, {}).get("balance")
+    if saved_balance:
+        value_text = f"💊{humanize_number(saved_balance['health'])} 💎{humanize_number(saved_balance['diamonds'])}"
+        kb = prev_value_keyboard(value_text, "useprev_balance", "newval_balance")
+        await query.edit_message_text(
+            "Cari 💊 (sağlıq həbi) və 💎 (almaz) balansın neçədir?", reply_markup=kb
+        )
+        return HEALTH
+
     await query.edit_message_text("Cari 💊 (sağlıq həbi) balansın neçədir?")
     return HEALTH
 
 
 # ---------- Balans ----------
+
+async def balance_use_prev_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    saved = context.user_data.get(PROFILE_KEY, {}).get("balance", {})
+    health_val = saved.get("health")
+    diamonds_val = saved.get("diamonds")
+    if health_val is None or diamonds_val is None:
+        await query.answer("Əvvəlki balans tapılmadı, zəhmət olmasa yeni yaz.", show_alert=True)
+        await query.edit_message_text("Cari 💊 (sağlıq həbi) balansın neçədir?")
+        return HEALTH
+
+    context.user_data["health"] = health_val
+    context.user_data["diamonds"] = diamonds_val
+    await query.edit_message_text(
+        f"Balans: 💊{humanize_number(health_val)} 💎{humanize_number(diamonds_val)} "
+        "(əvvəlki dəyərdən istifadə olundu) ✅"
+    )
+
+    if context.user_data.get("use_existing_balance"):
+        return await ask_resource_select(update, context, from_callback=True)
+
+    await query.message.reply_text("Almaz paketində neçə 💎 var? (məs: 50000)")
+    return PKG_DIAMONDS
+
+
+async def balance_new_val_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Cari 💊 (sağlıq həbi) balansın neçədir?")
+    return HEALTH
+
 
 async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     value = try_parse_money(update.message.text)
@@ -128,6 +207,12 @@ async def diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 40000 və ya 40k).")
         return DIAMONDS
     context.user_data["diamonds"] = value
+
+    # Balans tamamlanan kimi profilə yazırıq ki, hesablama yarımçıq qalsa belə itməsin.
+    context.user_data.setdefault(PROFILE_KEY, {})["balance"] = {
+        "health": context.user_data["health"], "diamonds": value,
+    }
+
     if context.user_data.get("use_existing_balance"):
         return await ask_resource_select(update, context, from_callback=False)
     await update.message.reply_text("Almaz paketində neçə 💎 var? (məs: 50000)")
@@ -159,12 +244,9 @@ async def ask_resource_select(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["selected"] = set()
     text = "Hansı resurs(lar) üçün hesablamaq istəyirsən?"
     kb_text = "Bir və ya bir neçə resurs seç, sonra 'Davam et' düyməsinə bas:"
-    if from_callback:
-        await update.callback_query.edit_message_text(text)
-        await update.callback_query.message.reply_text(kb_text, reply_markup=resource_select_keyboard(set()))
-    else:
-        await update.message.reply_text(text)
-        await update.message.reply_text(kb_text, reply_markup=resource_select_keyboard(set()))
+    message = update.callback_query.message if from_callback else update.message
+    await message.reply_text(text)
+    await message.reply_text(kb_text, reply_markup=resource_select_keyboard(set()))
     return RESOURCE_SELECT
 
 
@@ -176,6 +258,8 @@ async def resource_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "res_all":
         selected.clear()
         selected.update(RESOURCE_ORDER)
+        await query.edit_message_reply_markup(reply_markup=resource_select_keyboard(selected))
+        return RESOURCE_SELECT
     elif query.data == "res_continue":
         if not selected:
             await query.answer("Zəhmət olmasa ən azı 1 resurs seç.", show_alert=True)
@@ -190,9 +274,8 @@ async def resource_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             selected.discard(r)
         else:
             selected.add(r)
-
-    await query.edit_message_reply_markup(reply_markup=resource_select_keyboard(selected))
-    return RESOURCE_SELECT
+        await query.edit_message_reply_markup(reply_markup=resource_select_keyboard(selected))
+        return RESOURCE_SELECT
 
 
 # ---------- Bonus ----------
@@ -237,10 +320,40 @@ async def ask_next_production(update: Update, context: ContextTypes.DEFAULT_TYPE
     is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
     bonus_note = " (bu, bonuslu fabrikindir)" if is_bonus_res else ""
     text = f"{current}{bonus_note} üçün 1 çalışmada nə qədər {unit} istehsal olunur?"
-    if update.callback_query:
-        await update.callback_query.message.reply_text(text)
+
+    message = update.callback_query.message if update.callback_query else update.message
+    saved = context.user_data.get(PROFILE_KEY, {}).get(current, {})
+    saved_production = saved.get("production")
+    if saved_production is not None:
+        value_text = f"{humanize_number(saved_production)} {unit}"
+        kb = prev_value_keyboard(value_text, "useprev_production", "newval_production")
+        await message.reply_text(text, reply_markup=kb)
     else:
-        await update.message.reply_text(text)
+        await message.reply_text(text)
+    return COLLECT_PRODUCTION
+
+
+async def production_use_prev_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = context.user_data["current_resource"]
+    saved = context.user_data.get(PROFILE_KEY, {}).get(current, {})
+    value = saved.get("production")
+    if value is None:
+        await query.answer("Əvvəlki dəyər tapılmadı.", show_alert=True)
+        return COLLECT_PRODUCTION
+    context.user_data["current_production"] = value
+    unit = RESOURCE_UNITS.get(current, "ədəd")
+    await query.edit_message_text(f"{current} istehsalı: {humanize_number(value)} {unit} (əvvəlki dəyərdən istifadə olundu) ✅")
+    return await after_production_collected(update, context, from_callback=True)
+
+
+async def production_new_val_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = context.user_data["current_resource"]
+    unit = RESOURCE_UNITS.get(current, "ədəd")
+    await query.edit_message_text(f"{current} üçün 1 çalışmada nə qədər {unit} istehsal olunur? Yeni dəyəri yaz:")
     return COLLECT_PRODUCTION
 
 
@@ -250,23 +363,58 @@ async def collect_production(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz.")
         return COLLECT_PRODUCTION
     context.user_data["current_production"] = value
+    return await after_production_collected(update, context, from_callback=False)
 
+
+async def after_production_collected(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback: bool):
     current = context.user_data["current_resource"]
     is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
+    message = update.callback_query.message if from_callback else update.message
+
     if is_bonus_res:
         unit = RESOURCE_UNITS.get(current, "ədəd")
-        await update.message.reply_text(
+        text = (
             f"Əgər bonus olmasaydı, 1 çalışmada nə qədər {unit} istehsal edə bilərsən?\n"
             "(bonuslu fabrikin, bonussuz ən yaxşı fabriklə müqayisəsi üçün lazımdır)"
         )
+        saved = context.user_data.get(PROFILE_KEY, {}).get(current, {})
+        saved_alt = saved.get("alt_production")
+        if saved_alt is not None:
+            value_text = f"{humanize_number(saved_alt)} {unit}"
+            kb = prev_value_keyboard(value_text, "useprev_altproduction", "newval_altproduction")
+            await message.reply_text(text, reply_markup=kb)
+        else:
+            await message.reply_text(text)
         return COLLECT_ALT_PRODUCTION
 
     context.user_data["price_step"] = 0
-    await update.message.reply_text(
+    await message.reply_text(
         "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
         reply_markup=SKIP_PRICE_KB,
     )
     return COLLECT_PRICE
+
+
+async def alt_production_use_prev_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = context.user_data["current_resource"]
+    saved = context.user_data.get(PROFILE_KEY, {}).get(current, {})
+    value = saved.get("alt_production")
+    if value is None:
+        await query.answer("Əvvəlki dəyər tapılmadı.", show_alert=True)
+        return COLLECT_ALT_PRODUCTION
+    context.user_data["current_alt_production"] = value
+    unit = RESOURCE_UNITS.get(current, "ədəd")
+    await query.edit_message_text(f"Bonussuz istehsal: {humanize_number(value)} {unit} (əvvəlki dəyərdən istifadə olundu) ✅")
+    return await after_alt_production_collected(update, context, from_callback=True)
+
+
+async def alt_production_new_val_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("Yeni dəyəri yaz:")
+    return COLLECT_ALT_PRODUCTION
 
 
 async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -275,7 +423,12 @@ async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz.")
         return COLLECT_ALT_PRODUCTION
     context.user_data["current_alt_production"] = value
-    await update.message.reply_text(
+    return await after_alt_production_collected(update, context, from_callback=False)
+
+
+async def after_alt_production_collected(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback: bool):
+    message = update.callback_query.message if from_callback else update.message
+    await message.reply_text(
         f"Bonuslu fabrikdə 1 çalışma başına, istehsaldan əlavə, orta hesabla nə qədər ₼ bonus qazanırsan?\n"
         f"{BIG_NUMBER_HINT}"
     )
@@ -298,7 +451,6 @@ async def bonus_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE, value: float, reply_text):
     step = context.user_data.get("price_step", 0)
-
     if step == 0:
         if value == 0:
             context.user_data["current_price_now"] = None
@@ -310,7 +462,6 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=SKIP_PRICE_KB,
         )
         return COLLECT_PRICE
-
     if step == 1:
         context.user_data["current_price_worst"] = None if value == 0 else value
         context.user_data["price_step"] = 2
@@ -319,7 +470,6 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=SKIP_PRICE_KB,
         )
         return COLLECT_PRICE
-
     context.user_data["current_price_best"] = None if value == 0 else value
     return await finish_current_resource(update, context)
 
@@ -353,8 +503,15 @@ async def finish_current_resource(update: Update, context: ContextTypes.DEFAULT_
         alt_production_per_work=ud.get("current_alt_production"),
     )
     ud["finished_resources"].append(resource)
-    ud["queue"].pop(0)
 
+    # Bu resursun istehsal rəqəmlərini profilə yazırıq ki, növbəti dəfə
+    # yenidən soruşulanda "əvvəlki dəyər" kimi təklif edilə bilsin.
+    profile_entry = {"production": ud["current_production"]}
+    if ud.get("current_alt_production") is not None:
+        profile_entry["alt_production"] = ud["current_alt_production"]
+    ud.setdefault(PROFILE_KEY, {})[ud["current_resource"]] = profile_entry
+
+    ud["queue"].pop(0)
     for k in ("current_resource", "current_production", "current_price_now",
               "current_price_worst", "current_price_best", "current_alt_production", "price_step"):
         ud.pop(k, None)
@@ -370,7 +527,6 @@ async def finish_current_resource(update: Update, context: ContextTypes.DEFAULT_
 
 async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = context.user_data
-
     game_input = GameInput(
         health=ud["health"], diamonds=ud["diamonds"],
         use_existing_balance=ud.get("use_existing_balance", True),
@@ -381,7 +537,6 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bonus_per_work_m=ud.get("bonus_per_work", 0.0),
         resources=ud["finished_resources"],
     )
-
     result = full_analysis(game_input)
     reports_by_name = {r["name"]: r for r in result["reports"]}
     cost_per_work = result["cost_per_work_m"]
@@ -501,7 +656,8 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Digər ----------
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Ləğv edildi. Yenidən başlamaq üçün /start yaz.", reply_markup=commands_keyboard())
+    if update.message:
+        await update.message.reply_text("Ləğv edildi. Yenidən başlamaq üçün /start yaz.", reply_markup=commands_keyboard())
     return ConversationHandler.END
 
 
@@ -551,38 +707,66 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN mühit dəyişəni tapılmadı.")
 
-    app = ApplicationBuilder().token(token).post_init(post_init).build()
+    # PicklePersistence: istifadəçinin balans/istehsal profili və aktiv
+    # söhbət vəziyyəti bot yenidən başladılanda (məs. Railway restart) itmir.
+    # Qeyd: hostinq platformasında fayl sistemi "ephemeral" olarsa (yəni hər
+    # yeni deploy-da sıfırlanırsa), bu fayl da sıfırlanacaq - daimi saxlamaq
+    # üçün platformanın "volume/disk" funksiyasını qoşmaq lazımdır.
+    persistence = PicklePersistence(filepath="bot_persistence.pkl")
+    app = ApplicationBuilder().token(token).persistence(persistence).post_init(post_init).build()
 
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
             CallbackQueryHandler(start, pattern="^restart$"),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_START)}$"), start),
         ],
         states={
             MODE: [CallbackQueryHandler(mode_choice, pattern="^mode_")],
-            HEALTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, health)],
-            DIAMONDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, diamonds)],
-            PKG_DIAMONDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_diamonds)],
-            PKG_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_price)],
+            HEALTH: [
+                CallbackQueryHandler(balance_use_prev_callback, pattern="^useprev_balance$"),
+                CallbackQueryHandler(balance_new_val_callback, pattern="^newval_balance$"),
+                *nav_handlers(),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, health),
+            ],
+            DIAMONDS: [*nav_handlers(), MessageHandler(filters.TEXT & ~filters.COMMAND, diamonds)],
+            PKG_DIAMONDS: [*nav_handlers(), MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_diamonds)],
+            PKG_PRICE: [*nav_handlers(), MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_price)],
             RESOURCE_SELECT: [CallbackQueryHandler(resource_toggle, pattern="^res_")],
             BONUS_YN: [CallbackQueryHandler(bonus_yn, pattern="^bonus_")],
             BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_")],
-            COLLECT_PRODUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_production)],
-            COLLECT_ALT_PRODUCTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_alt_production)],
-            BONUS_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bonus_value)],
+            COLLECT_PRODUCTION: [
+                CallbackQueryHandler(production_use_prev_callback, pattern="^useprev_production$"),
+                CallbackQueryHandler(production_new_val_callback, pattern="^newval_production$"),
+                *nav_handlers(),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, collect_production),
+            ],
+            COLLECT_ALT_PRODUCTION: [
+                CallbackQueryHandler(alt_production_use_prev_callback, pattern="^useprev_altproduction$"),
+                CallbackQueryHandler(alt_production_new_val_callback, pattern="^newval_altproduction$"),
+                *nav_handlers(),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, collect_alt_production),
+            ],
+            BONUS_VALUE: [*nav_handlers(), MessageHandler(filters.TEXT & ~filters.COMMAND, bonus_value)],
             COLLECT_PRICE: [
                 CallbackQueryHandler(skip_price_callback, pattern="^skip_price$"),
+                *nav_handlers(),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_price),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_CANCEL)}$"), cancel),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_START)}$"), start),
             MessageHandler(filters.ALL, fallback_unrecognized),
         ],
         allow_reentry=True,
+        name="diplomacia_conversation",
+        persistent=True,
     )
 
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_HELP)}$"), help_command))
     app.add_handler(conv)
     app.run_polling()
 
