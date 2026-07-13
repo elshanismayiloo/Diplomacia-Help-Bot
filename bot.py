@@ -12,7 +12,8 @@ import os
 import asyncio
 import logging
 from telegram import (
-    Update, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
+    Update, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ConversationHandler,
@@ -72,6 +73,14 @@ def resource_label(name: str, bonus_resource_name):
     return f"bonuslu {name}" if name == bonus_resource_name else name
 
 
+def commands_keyboard():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("/start"), KeyboardButton("/help"), KeyboardButton("/cancel")]],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
 # ---------- Başlanğıc ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,7 +97,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
         await update.callback_query.message.reply_text(text, reply_markup=mode_keyboard())
     else:
-        await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(text, reply_markup=commands_keyboard())
         await update.message.reply_text("Seçim et:", reply_markup=mode_keyboard())
     return MODE
 
@@ -492,7 +501,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Digər ----------
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Ləğv edildi. Yenidən başlamaq üçün /start yaz.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Ləğv edildi. Yenidən başlamaq üçün /start yaz.", reply_markup=commands_keyboard())
     return ConversationHandler.END
 
 
@@ -569,6 +578,7 @@ def main():
             CommandHandler("cancel", cancel),
             MessageHandler(filters.ALL, fallback_unrecognized),
         ],
+        allow_reentry=True,
     )
 
     app.add_handler(CommandHandler("help", help_command))
