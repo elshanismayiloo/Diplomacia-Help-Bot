@@ -20,7 +20,7 @@ ENERGY_PER_WORK = 100
 FREE_REGEN_PER_WORK = 5
 NET_ENERGY_COST = ENERGY_PER_WORK - FREE_REGEN_PER_WORK  # 95
 HEALTH_TO_DIAMOND_RATE = 5  # 5 💊 = 1 💎
-MARKET_BATCH_SIZE = 20000   # bazarda 1 dəfəyə satıla bilən maksimum miqdar
+MARKET_BATCH_SIZE = 20000  # bazarda 1 dəfəyə satıla bilən maksimum miqdar
 WORK_INTERVAL_SECONDS = 600  # hər 10 dəqiqədə 1 çalışma
 
 RESOURCE_ORDER = ["🦌", "🪙", "🛢", "⚗️"]
@@ -56,7 +56,7 @@ class GameInput:
     package_price_m: float = 0.0
     bonus_active: bool = False
     bonus_resource_name: Optional[str] = None
-    bonus_per_work_m: float = 0.0   # bonuslu fabrikdə 1 çalışma başına əlavə ₼ (istehsaldan asılı olmayaraq)
+    bonus_per_work_m: float = 0.0  # bonuslu fabrikdə 1 çalışma başına əlavə ₼ (istehsaldan asılı olmayaraq)
     resources: list = field(default_factory=list)  # list[ResourceInput]
 
 
@@ -146,22 +146,23 @@ def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
         "has_price": resource.price_now is not None,
         "total_cost_m": total_cost,
     }
+
     if resource.price_now is not None:
         result["now"] = calc_for_price(resource.price_now, production, include_bonus=True)
-        if resource.price_worst is not None:
-            result["worst"] = calc_for_price(resource.price_worst, production, include_bonus=True)
-        if resource.price_best is not None:
-            result["best"] = calc_for_price(resource.price_best, production, include_bonus=True)
+    if resource.price_worst is not None:
+        result["worst"] = calc_for_price(resource.price_worst, production, include_bonus=True)
+    if resource.price_best is not None:
+        result["best"] = calc_for_price(resource.price_best, production, include_bonus=True)
 
-        if is_bonus and resource.alt_production_per_work is not None:
-            # Bonus olmasaydı: nə əlavə istehsal, nə də əlavə ₼ bonusu olmazdı.
-            alt_production = round(resource.alt_production_per_work * works, 2)
-            alt_now = calc_for_price(resource.price_now, alt_production, include_bonus=False)
-            result["alt"] = {
-                "production": alt_production,
-                "now": alt_now,
-                "diff_net_m": round(result["now"]["net_income_m"] - alt_now["net_income_m"], 2),
-            }
+    if is_bonus and resource.alt_production_per_work is not None and resource.price_now is not None:
+        # Bonus olmasaydı: nə əlavə istehsal, nə də əlavə ₼ bonusu olmazdı.
+        alt_production = round(resource.alt_production_per_work * works, 2)
+        alt_now = calc_for_price(resource.price_now, alt_production, include_bonus=False)
+        result["alt"] = {
+            "production": alt_production,
+            "now": alt_now,
+            "diff_net_m": round(result["now"]["net_income_m"] - alt_now["net_income_m"], 2),
+        }
 
     return result
 
@@ -175,11 +176,11 @@ def minimal_sale_price(cost_per_work_m: float, production_per_work: float) -> Op
 def parse_money(text: str) -> float:
     """
     İstifadəçinin qısaldılmış yazdığı miqdarı rəqəmə çevirir.
-      "20000"  -> 20000.0
-      "20k"    -> 20000.0        (k = ×1 000)
-      "1kkk"   -> 1000000.0      ("kkk" ardıcıllığı "M" ilə eynidir)
-      "1m/1M"  -> 1000000.0
-      "1.5k"   -> 1500.0
+    "20000" -> 20000.0
+    "20k" -> 20000.0 (k = ×1 000)
+    "1kkk" -> 1000000.0 ("kkk" ardıcıllığı "M" ilə eynidir)
+    "1m/1M" -> 1000000.0
+    "1.5k" -> 1500.0
     """
     t = text.strip().lower().replace(" ", "")
     if not t:
