@@ -75,7 +75,7 @@ def resource_label(name: str, bonus_resource_name):
 
 def commands_keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("🚀 Başla"), KeyboardButton("❓Kömək"), KeyboardButton("❌ Ləğv et")]],
+        [[KeyboardButton("/start 🚀 Başla"), KeyboardButton("/help ❓ Kömək"), KeyboardButton("/cancel ❌ Ləğv et")]],
         resize_keyboard=True,
         is_persistent=True,
     )
