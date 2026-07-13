@@ -9,6 +9,7 @@ Diplomacia Profit Calculator - Telegram Bot
 """
 
 import os
+import asyncio
 import logging
 from telegram import (
     Update, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
@@ -23,6 +24,7 @@ from calculator import (
     humanize_m, humanize_number, format_price,
     try_parse_money, try_parse_package_price, RESOURCE_UNITS, RESOURCE_ORDER, MARKET_BATCH_SIZE,
 )
+import telegraph_setup
 
 logging.basicConfig(level=logging.INFO)
 
@@ -76,7 +78,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = (
         "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
-        "İstənilən vaxt /cancel ilə dayandıra bilərsən.\n"
+        "İstənilən vaxt /cancel ilə dayandıra bilərsən. Lazımi rəqəmləri oyunda necə "
+        "tapacağını bilmirsənsə, /help yaz.\n"
         f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: "
         f"50000, 50k, 1m, 1M, 1kkk.\n\n"
         "Necə hesablamaq istəyirsən?"
@@ -501,11 +504,36 @@ async def fallback_unrecognized(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 
+HELP_STEPS_TEXT = (
+    "📖 *Lazımi məlumatları oyunda necə tapmalı:*\n\n"
+    "1️⃣ Baş səhifədən FABRİKLƏR bölməsinə keç.\n"
+    "2️⃣ Hər resurs növü üzrə ən yüksək fabrikləri araşdır.\n"
+    "3️⃣ Hər 1 çalışmada qazana biləcəyin miqdarı kənara yaz.\n"
+    "4️⃣ İş səhifəsindən Bazara keç.\n"
+    "5️⃣ Hər resurs üzrə cari qiyməti yaz (qiymət tendensiyasını izləmək faydalıdır).\n\n"
+    "Bu rəqəmləri topladıqdan sonra /start yazıb hesablamaya başlaya bilərsən."
+)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_url = context.application.bot_data.get("help_url")
+    if help_url:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📖 Şəkilli təlimatı aç", url=help_url)]])
+        await update.message.reply_text(
+            "Aşağıdakı düymədən şəkilli təlimatı aça bilərsən, ya da qısa xülasəni burada oxu:",
+            reply_markup=kb,
+        )
+    await update.message.reply_text(HELP_STEPS_TEXT, parse_mode="Markdown")
+
+
 async def post_init(app):
     await app.bot.set_my_commands([
         BotCommand("start", "Hesablamanı başlat"),
+        BotCommand("help", "Necə etməli? (təlimat)"),
         BotCommand("cancel", "Cari hesablamanı ləğv et"),
     ])
+    help_url = await asyncio.to_thread(telegraph_setup.get_or_create_help_url)
+    app.bot_data["help_url"] = help_url
 
 
 def main():
@@ -543,6 +571,7 @@ def main():
         ],
     )
 
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(conv)
     app.run_polling()
 

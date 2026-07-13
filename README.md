@@ -8,7 +8,22 @@ başqa istifadəçilər bunu görmür.
 ## Fayllar
 - `calculator.py` - saf riyazi hesablama (Telegram-dan asılı deyil, test edilə bilər)
 - `bot.py` - Telegram bot (sual-cavab axını)
+- `telegraph_setup.py` - "/help" üçün Telegraph təlimat səhifəsini avtomatik yaradır
+- `step1.jpg` ... `step5.jpg` - təlimat məqaləsində istifadə olunan şəkillər
 - `requirements.txt` - lazımi Python paketləri
+- `Procfile` - hostinq platforması üçün başlatma əmri
+
+## /help əmri necə işləyir
+Bot ilk dəfə işə düşəndə (`TELEGRAPH_HELP_URL` mühit dəyişəni yoxdursa) avtomatik
+olaraq Telegraph-da (telegra.ph) 5 addımlı, şəkilli bir təlimat səhifəsi yaradır və
+bunu Railway-in "Logs" bölməsinə yazır. `/help` yazan istifadəçiyə bu səhifənin
+linki (düymə ilə) və qısa mətn xülasəsi göndərilir.
+
+**Tövsiyə:** ilk uğurlu deploy-dan sonra Railway-in "Logs" bölməsində
+`Telegraph təlimat səhifəsi yaradıldı: https://telegra.ph/...` sətrini tapıb,
+həmin linki Railway-də **Variables** bölməsinə `TELEGRAPH_HELP_URL` adı ilə
+əlavə et. Bu, hər yenidən başlamada (deploy) təzə səhifə yaranmasının qarşısını
+alır və köhnə linkin işləməyə davam etməsini təmin edir.
 
 ## Qurulma addımları
 
