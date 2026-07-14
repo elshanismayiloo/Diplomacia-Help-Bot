@@ -55,6 +55,13 @@ STEP_STATE = {
 
 NUMPAD_MAX_LEN = 15
 
+# Sabit (persistent) klaviaturadakı təmiz düymə adları (slash-komanda görünmür,
+# yalnız emoji + söz). Bu mətnlər gəldikdə uyğun funksiya çağırılır.
+BUTTON_START = "🚀 Başla"
+BUTTON_HELP = "❓ Kömək"
+BUTTON_QIYMETLER = "📈 Qiymətlər"
+BUTTON_CANCEL = "❌ Ləğv et"
+
 # ---------- Klaviaturalar ----------
 
 def mode_keyboard():
@@ -93,7 +100,10 @@ def resource_label(name: str, bonus_resource_name):
 
 def commands_keyboard():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("/start 🚀 Başla"), KeyboardButton("/help ❓ Kömək"), KeyboardButton("/cancel ❌ Ləğv et")]],
+        [
+            [KeyboardButton(BUTTON_START), KeyboardButton(BUTTON_HELP)],
+            [KeyboardButton(BUTTON_QIYMETLER), KeyboardButton(BUTTON_CANCEL)],
+        ],
         resize_keyboard=True,
         is_persistent=True,
     )
@@ -151,6 +161,13 @@ async def send_numpad_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE,
     )
 
 
+async def _safe_edit_text(query, text: str, reply_markup):
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+    except BadRequest:
+        pass
+
+
 async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     step = context.user_data.get("numeric_step")
@@ -166,17 +183,17 @@ async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not buffer:
             await query.answer("⚠️ Əvvəlcə rəqəm daxil et.", show_alert=True)
             return STEP_STATE[step]
-        await query.answer()
         prompt = context.user_data.get("numpad_prompt", "")
-        try:
-            await query.edit_message_text(f"{prompt}\n\n✅ {buffer}", reply_markup=InlineKeyboardMarkup([]))
-        except BadRequest:
-            pass
+        # answer() və edit_message_text() ardıcıl deyil, paralel göndərilir -
+        # bu, hər basılışdan sonra rəqəmin ekranda görünmə gecikməsini azaldır.
+        await asyncio.gather(
+            query.answer(),
+            _safe_edit_text(query, f"{prompt}\n\n✅ {buffer}", InlineKeyboardMarkup([])),
+        )
         handler_fn = STEP_HANDLER[step]
         _clear_numpad_state(context)
         return await handler_fn(update, context, raw_text=buffer)
 
-    await query.answer()
     buffer = context.user_data.get("numpad_buffer", "")
     if token == "back":
         buffer = buffer[:-1]
@@ -186,13 +203,10 @@ async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prompt = context.user_data.get("numpad_prompt", "")
     extra_rows = context.user_data.get("numpad_extra_rows")
-    try:
-        await query.edit_message_text(
-            render_numpad_text(prompt, buffer),
-            reply_markup=numpad_keyboard(extra_rows),
-        )
-    except BadRequest:
-        pass
+    await asyncio.gather(
+        query.answer(),
+        _safe_edit_text(query, render_numpad_text(prompt, buffer), numpad_keyboard(extra_rows)),
+    )
     return STEP_STATE[step]
 
 
@@ -634,10 +648,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_STEPS_TEXT, parse_mode="Markdown")
 
 
+async def qiymetler_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # TODO: bura icma bazar qiymətləri məntiqini bağla (hazırda placeholder-dir).
+    await update.message.reply_text("📈 Bu funksiya hazırlanır - tezliklə əlavə olunacaq.")
+
+
 async def post_init(app):
     await app.bot.set_my_commands([
         BotCommand("start", "🚀 Hesablamanı başlat"),
         BotCommand("help", "❓ Necə etməli? (təlimat)"),
+        BotCommand("qiymetler", "📈 İcma bazar qiymətləri"),
         BotCommand("cancel", "❌ Cari hesablamanı ləğv et"),
     ])
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
@@ -667,58 +687,82 @@ def main():
 
     app = ApplicationBuilder().token(token).post_init(post_init).build()
 
+    # "🚀 Başla" və "❌ Ləğv et" söhbətin gedişatını dəyişdiyi üçün (yeni state-ə
+    # keçir/bitirir) hər state-in öz siyahısına əlavə olunur - bununla
+    # ConversationHandler-in daxili "hansı state-dəyəm" izləməsi düzgün qalır.
+    RESTART_SHORTCUT = MessageHandler(filters.Text([BUTTON_START]), start)
+    CANCEL_SHORTCUT = MessageHandler(filters.Text([BUTTON_CANCEL]), cancel)
+    SHORTCUTS = [RESTART_SHORTCUT, CANCEL_SHORTCUT]
+
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start),
             CallbackQueryHandler(start, pattern="^restart$"),
+            RESTART_SHORTCUT,
         ],
         states={
-            MODE: [CallbackQueryHandler(mode_choice, pattern="^mode_")],
+            MODE: [CallbackQueryHandler(mode_choice, pattern="^mode_"), *SHORTCUTS],
             HEALTH: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, health),
             ],
             DIAMONDS: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, diamonds),
             ],
             PKG_DIAMONDS: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_diamonds),
             ],
             PKG_PRICE: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, pkg_price),
             ],
-            RESOURCE_SELECT: [CallbackQueryHandler(resource_toggle, pattern="^res_")],
-            BONUS_YN: [CallbackQueryHandler(bonus_yn, pattern="^bonus_")],
-            BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_")],
+            RESOURCE_SELECT: [CallbackQueryHandler(resource_toggle, pattern="^res_"), *SHORTCUTS],
+            BONUS_YN: [CallbackQueryHandler(bonus_yn, pattern="^bonus_"), *SHORTCUTS],
+            BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_"), *SHORTCUTS],
             COLLECT_PRODUCTION: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_production),
             ],
             COLLECT_ALT_PRODUCTION: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_alt_production),
             ],
             BONUS_VALUE: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bonus_value),
             ],
             COLLECT_PRICE: [
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
                 CallbackQueryHandler(skip_price_callback, pattern="^skip_price$"),
+                *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_price),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
+            *SHORTCUTS,
             MessageHandler(filters.ALL, fallback_unrecognized),
         ],
         allow_reentry=True,
     )
 
+    # "❓ Kömək" və "📈 Qiymətlər" söhbətin state-ini dəyişmir (sadəcə məlumat
+    # göstərir), ona görə ConversationHandler-dən ƏVVƏL, qlobal səviyyədə
+    # qeydə alınır - /help kimi, hansı state-də olur-olsun işləyir və
+    # söhbətin gedişatına toxunmur.
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(filters.Text([BUTTON_HELP]), help_command))
+    app.add_handler(CommandHandler("qiymetler", qiymetler_command))
+    app.add_handler(MessageHandler(filters.Text([BUTTON_QIYMETLER]), qiymetler_command))
     app.add_handler(conv)
     app.run_polling()
 
