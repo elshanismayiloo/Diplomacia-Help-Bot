@@ -215,11 +215,11 @@ async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     text = (
-        "Salam! Diplomacia gəlir hesablayıcısına xoş gəldin.\n\n"
-        "İstənilən vaxt /cancel ilə dayandıra bilərsən. Lazımi rəqəmləri oyunda necə "
-        "tapacağını bilmirsənsə, /help yaz.\n"
-        f"Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən: "
-        f"50000, 50k, 1m, 1M, 1kkk.\n\n"
+        "Salam! Diplomacia Gəlir Hesablayıcısına xoş gəldin.\n\n"
+        "Lazımi rəqəmləri oyunda necə tapacağını bilmirsənsə, ❓️Kömək (/help) düyməsi ilə öyrənə bilərsən.\n\n"
+        "İstənilən vaxt ❌️ Ləğv et (/cancel) düyməsi ilə hesablamanı dayandıra bilərsən.\n\n"
+        "🔢 Böyük rəqəm tələb olunan suallarda istənilən formatda yaza bilərsən\n"
+        "(50000, 50k, 1m, 1M, 1kkk).\n\n"
         "Necə hesablamaq istəyirsən?"
     )
     if update.callback_query:
@@ -516,7 +516,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     header_lines = [
         "📊 *Nəticələr*",
-        f"Toplam mümkün çalışma: *{humanize_number(result['total_works'])}*",
+        f"Çalışma sayı: *{result['total_works']}*",
         f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*",
     ]
     if cost_per_work > 0:
