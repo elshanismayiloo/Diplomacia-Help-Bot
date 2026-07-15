@@ -18,7 +18,8 @@ from telegram import (
 from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ConversationHandler,
-    MessageHandler, CallbackQueryHandler, ContextTypes, filters
+    MessageHandler, CallbackQueryHandler, ContextTypes, filters,
+    PicklePersistence,
 )
 
 from calculator import (
@@ -27,6 +28,7 @@ from calculator import (
     try_parse_money, try_parse_package_price, RESOURCE_UNITS, RESOURCE_ORDER, MARKET_BATCH_SIZE,
 )
 import telegraph_setup
+import price_history
 
 logging.basicConfig(level=logging.INFO)
 
@@ -54,6 +56,10 @@ STEP_STATE = {
 }
 
 NUMPAD_MAX_LEN = 15
+
+# Hər resursun son daxil edilmiş istehsal (və bonussuz istehsal) miqdarını
+# yadda saxlayır ki, növbəti dəfə eyni resursu seçəndə təklif oluna bilsin.
+PRODUCTION_PROFILE_KEY = "production_profile"
 
 # Sabit (persistent) klaviaturadakı təmiz düymə adları (slash-komanda görünmür,
 # yalnız emoji + söz). Bu mətnlər gəldikdə uyğun funksiya çağırılır.
@@ -149,15 +155,21 @@ def _clear_numpad_state(context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("numpad_extra_rows", None)
 
 
+BACK_ROW = [[InlineKeyboardButton("◀️ Geri (düzəliş et)", callback_data="np_goback")]]
+
+
 async def send_numpad_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                              step: str, prompt: str, extra_rows=None):
+                              step: str, prompt: str, extra_rows=None, prefill: str = ""):
     context.user_data["numeric_step"] = step
-    context.user_data["numpad_buffer"] = ""
+    context.user_data["numpad_buffer"] = prefill or ""
     context.user_data["numpad_prompt"] = prompt
-    context.user_data["numpad_extra_rows"] = extra_rows
+    rows = list(extra_rows) if extra_rows else []
+    if context.user_data.get("nav_stack"):
+        rows = rows + BACK_ROW
+    context.user_data["numpad_extra_rows"] = rows
     await update.effective_message.reply_text(
-        render_numpad_text(prompt, ""),
-        reply_markup=numpad_keyboard(extra_rows),
+        render_numpad_text(prompt, context.user_data["numpad_buffer"]),
+        reply_markup=numpad_keyboard(rows),
     )
 
 
@@ -166,6 +178,16 @@ async def _safe_edit_text(query, text: str, reply_markup):
         await query.edit_message_text(text, reply_markup=reply_markup)
     except BadRequest:
         pass
+
+
+def _format_prefill(value) -> str:
+    if value is None:
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return str(int(f)) if f.is_integer() else str(f)
 
 
 async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,6 +199,16 @@ async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     token = query.data[len("np_"):]
+
+    if token == "goback":
+        stack = context.user_data.get("nav_stack", [])
+        if not stack:
+            await query.answer("⬅️ Geri qayıdacaq addım yoxdur.", show_alert=True)
+            return STEP_STATE[step]
+        entry = stack.pop()
+        await query.answer()
+        reask_fn = REASK_DISPATCH[entry["kind"]]
+        return await reask_fn(update, context, _format_prefill(entry.get("value")))
 
     if token == "ok":
         buffer = context.user_data.get("numpad_buffer", "")
@@ -213,7 +245,10 @@ async def numpad_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Başlanğıc ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    saved_profile = context.user_data.get(PRODUCTION_PROFILE_KEY)
     context.user_data.clear()
+    if saved_profile:
+        context.user_data[PRODUCTION_PROFILE_KEY] = saved_profile
     text = (
         "Salam! Diplomacia Gəlir Hesablayıcısına xoş gəldin.\n\n"
         "Lazımi rəqəmləri oyunda necə tapacağını bilmirsənsə, ❓️Kömək (/help) düyməsi ilə öyrənə bilərsən.\n\n"
@@ -249,6 +284,7 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text=No
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 və ya 50k).")
         return HEALTH
     context.user_data["health"] = value
+    context.user_data.setdefault("nav_stack", []).append({"kind": "health", "value": value})
     await send_numpad_prompt(update, context, "diamonds", "Cari 💎 (almaz) balansın neçədir?")
     return DIAMONDS
 
@@ -260,6 +296,7 @@ async def diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text=
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 40000 və ya 40k).")
         return DIAMONDS
     context.user_data["diamonds"] = value
+    context.user_data.setdefault("nav_stack", []).append({"kind": "diamonds", "value": value})
     if context.user_data.get("use_existing_balance"):
         return await ask_resource_select(update, context)
     await send_numpad_prompt(update, context, "pkg_diamonds", "Almaz paketində neçə 💎 var? (məs: 50000)")
@@ -273,6 +310,7 @@ async def pkg_diamonds(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_t
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 50000 və ya 50k).")
         return PKG_DIAMONDS
     context.user_data["package_diamonds"] = value
+    context.user_data.setdefault("nav_stack", []).append({"kind": "pkg_diamonds", "value": value})
     await send_numpad_prompt(update, context, "pkg_price", "Həmin paketin qiyməti neçə M-dir? (məs: 120M)")
     return PKG_PRICE
 
@@ -291,6 +329,7 @@ async def pkg_price(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text
 
 async def ask_resource_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["selected"] = set()
+    context.user_data["nav_stack"] = []
     text = "Hansı resurs(lar) üçün hesablamaq istəyirsən?"
     kb_text = "Bir və ya bir neçə resurs seç, sonra 'Davam et' düyməsinə bas:"
     await update.effective_message.reply_text(text)
@@ -354,6 +393,14 @@ async def start_resource_queue(update: Update, context: ContextTypes.DEFAULT_TYP
     return await ask_next_production(update, context)
 
 
+def price_now_prompt_text(context: ContextTypes.DEFAULT_TYPE) -> str:
+    base = "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)"
+    current = context.user_data.get("current_resource")
+    stats = price_history.get_stats(context.bot_data, current) if current else None
+    hint = price_history.format_inline_hint(current, stats) if stats else ""
+    return f"{base}\n\n{hint}" if hint else base
+
+
 # ---------- Resurs məlumatları (istehsal + qiymətlər) ----------
 
 async def ask_next_production(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -365,8 +412,43 @@ async def ask_next_production(update: Update, context: ContextTypes.DEFAULT_TYPE
     is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
     bonus_note = " (bu, bonuslu fabrikindir)" if is_bonus_res else ""
     text = f"{current}{bonus_note} üçün 1 çalışmada nə qədər {unit} istehsal olunur?"
-    await send_numpad_prompt(update, context, "production", text)
+
+    extra_rows = None
+    saved = context.user_data.get(PRODUCTION_PROFILE_KEY, {}).get(current)
+    if saved and saved.get("production"):
+        label = f"✅ Əvvəlki: {humanize_number(saved['production'])} {unit}"
+        extra_rows = [[InlineKeyboardButton(label, callback_data="useprod_production")]]
+
+    await send_numpad_prompt(update, context, "production", text, extra_rows=extra_rows)
     return COLLECT_PRODUCTION
+
+
+async def _production_captured(update: Update, context: ContextTypes.DEFAULT_TYPE, value: float):
+    context.user_data["current_production"] = value
+    context.user_data.setdefault("nav_stack", []).append({"kind": "production", "value": value})
+    current = context.user_data["current_resource"]
+    is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
+    if is_bonus_res:
+        unit = RESOURCE_UNITS.get(current, "ədəd")
+        extra_rows = None
+        saved = context.user_data.get(PRODUCTION_PROFILE_KEY, {}).get(current)
+        if saved and saved.get("alt_production"):
+            label = f"✅ Əvvəlki: {humanize_number(saved['alt_production'])} {unit}"
+            extra_rows = [[InlineKeyboardButton(label, callback_data="useprod_alt_production")]]
+        await send_numpad_prompt(
+            update, context, "alt_production",
+            f"Əgər bonus olmasaydı, 1 çalışmada nə qədər {unit} istehsal edə bilərsən?\n"
+            "(bonuslu fabrikin, bonussuz ən yaxşı fabriklə müqayisəsi üçün lazımdır)",
+            extra_rows=extra_rows,
+        )
+        return COLLECT_ALT_PRODUCTION
+    context.user_data["price_step"] = 0
+    await send_numpad_prompt(
+        update, context, "price",
+        price_now_prompt_text(context),
+        extra_rows=SKIP_PRICE_ROW,
+    )
+    return COLLECT_PRICE
 
 
 async def collect_production(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text=None):
@@ -375,24 +457,33 @@ async def collect_production(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if value is None:
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz.")
         return COLLECT_PRODUCTION
-    context.user_data["current_production"] = value
+    return await _production_captured(update, context, value)
+
+
+async def use_saved_production_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
     current = context.user_data["current_resource"]
-    is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
-    if is_bonus_res:
-        unit = RESOURCE_UNITS.get(current, "ədəd")
-        await send_numpad_prompt(
-            update, context, "alt_production",
-            f"Əgər bonus olmasaydı, 1 çalışmada nə qədər {unit} istehsal edə bilərsən?\n"
-            "(bonuslu fabrikin, bonussuz ən yaxşı fabriklə müqayisəsi üçün lazımdır)",
-        )
-        return COLLECT_ALT_PRODUCTION
-    context.user_data["price_step"] = 0
+    saved = context.user_data.get(PRODUCTION_PROFILE_KEY, {}).get(current, {})
+    field = "alt_production" if query.data == "useprod_alt_production" else "production"
+    value = saved.get(field)
+    if value is None:
+        await query.answer("Əvvəlki dəyər tapılmadı.", show_alert=True)
+        return COLLECT_PRODUCTION if field == "production" else COLLECT_ALT_PRODUCTION
+    await query.answer()
+    _clear_numpad_state(context)
+    if field == "production":
+        return await _production_captured(update, context, value)
+    return await _alt_production_captured(update, context, value)
+
+
+async def _alt_production_captured(update: Update, context: ContextTypes.DEFAULT_TYPE, value: float):
+    context.user_data["current_alt_production"] = value
+    context.user_data.setdefault("nav_stack", []).append({"kind": "alt_production", "value": value})
     await send_numpad_prompt(
-        update, context, "price",
-        "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
-        extra_rows=SKIP_PRICE_ROW,
+        update, context, "bonus_value",
+        f"Bonuslu fabrikdə 1 çalışma başına, istehsaldan əlavə, orta hesabla nə qədər ₼ bonus qazanırsan?\n{BIG_NUMBER_HINT}",
     )
-    return COLLECT_PRICE
+    return BONUS_VALUE
 
 
 async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text=None):
@@ -401,12 +492,7 @@ async def collect_alt_production(update: Update, context: ContextTypes.DEFAULT_T
     if value is None:
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz.")
         return COLLECT_ALT_PRODUCTION
-    context.user_data["current_alt_production"] = value
-    await send_numpad_prompt(
-        update, context, "bonus_value",
-        f"Bonuslu fabrikdə 1 çalışma başına, istehsaldan əlavə, orta hesabla nə qədər ₼ bonus qazanırsan?\n{BIG_NUMBER_HINT}",
-    )
-    return BONUS_VALUE
+    return await _alt_production_captured(update, context, value)
 
 
 async def bonus_value(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text=None):
@@ -416,10 +502,11 @@ async def bonus_value(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_te
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 20000 və ya 20k).")
         return BONUS_VALUE
     context.user_data["bonus_per_work"] = value
+    context.user_data.setdefault("nav_stack", []).append({"kind": "bonus_value", "value": value})
     context.user_data["price_step"] = 0
     await send_numpad_prompt(
         update, context, "price",
-        "İndiki bazar qiyməti neçədir?\n(bu resurs üçün gəlir hesablamaq istəmirsənsə, aşağıdakı düyməni basa bilərsən)",
+        price_now_prompt_text(context),
         extra_rows=SKIP_PRICE_ROW,
     )
     return COLLECT_PRICE
@@ -432,6 +519,8 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data["current_price_now"] = None
             return await finish_current_resource(update, context)
         context.user_data["current_price_now"] = value
+        price_history.record_price(context.bot_data, context.user_data["current_resource"], value)
+        context.user_data.setdefault("nav_stack", []).append({"kind": "price_now", "value": value})
         context.user_data["price_step"] = 1
         await send_numpad_prompt(
             update, context, "price",
@@ -441,6 +530,9 @@ async def _handle_price_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         return COLLECT_PRICE
     if step == 1:
         context.user_data["current_price_worst"] = None if value == 0 else value
+        context.user_data.setdefault("nav_stack", []).append(
+            {"kind": "price_worst", "value": context.user_data["current_price_worst"]}
+        )
         context.user_data["price_step"] = 2
         await send_numpad_prompt(
             update, context, "price",
@@ -480,6 +572,12 @@ async def finish_current_resource(update: Update, context: ContextTypes.DEFAULT_
     )
     ud["finished_resources"].append(resource)
     ud["queue"].pop(0)
+    ud["nav_stack"] = []
+    profile = ud.setdefault(PRODUCTION_PROFILE_KEY, {})
+    profile[resource.name] = {
+        "production": resource.production_per_work,
+        "alt_production": resource.alt_production_per_work,
+    }
     for k in ("current_resource", "current_production", "current_price_now",
               "current_price_worst", "current_price_best", "current_alt_production", "price_step"):
         ud.pop(k, None)
@@ -516,7 +614,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     header_lines = [
         "📊 *Nəticələr*",
-        f"Çalışma sayı: *{result['total_works']}*",
+        f"Çalışma sayı: *{int(result['total_works'])}*",
         f"Təxmini vaxt: *{format_duration(result['total_duration_seconds'])}*",
     ]
     if cost_per_work > 0:
@@ -610,6 +708,92 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Yenidən hesablamaq istəyirsənsə:", reply_markup=restart_kb)
 
 
+# ---------- Geri qayıtma (düzəliş) ----------
+
+async def _reask_health(update, context, prefill):
+    context.user_data.pop("health", None)
+    await send_numpad_prompt(update, context, "health", "Cari 💊 (sağlıq həbi) balansın neçədir?", prefill=prefill)
+    return HEALTH
+
+
+async def _reask_diamonds(update, context, prefill):
+    context.user_data.pop("diamonds", None)
+    await send_numpad_prompt(update, context, "diamonds", "Cari 💎 (almaz) balansın neçədir?", prefill=prefill)
+    return DIAMONDS
+
+
+async def _reask_pkg_diamonds(update, context, prefill):
+    context.user_data.pop("package_diamonds", None)
+    await send_numpad_prompt(update, context, "pkg_diamonds", "Almaz paketində neçə 💎 var? (məs: 50000)", prefill=prefill)
+    return PKG_DIAMONDS
+
+
+async def _reask_pkg_price(update, context, prefill):
+    context.user_data.pop("package_price_m", None)
+    await send_numpad_prompt(update, context, "pkg_price", "Həmin paketin qiyməti neçə M-dir? (məs: 120M)", prefill=prefill)
+    return PKG_PRICE
+
+
+async def _reask_production(update, context, prefill):
+    context.user_data.pop("current_production", None)
+    current = context.user_data["current_resource"]
+    unit = RESOURCE_UNITS.get(current, "ədəd")
+    is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
+    bonus_note = " (bu, bonuslu fabrikindir)" if is_bonus_res else ""
+    text = f"{current}{bonus_note} üçün 1 çalışmada nə qədər {unit} istehsal olunur?"
+    await send_numpad_prompt(update, context, "production", text, prefill=prefill)
+    return COLLECT_PRODUCTION
+
+
+async def _reask_alt_production(update, context, prefill):
+    context.user_data.pop("current_alt_production", None)
+    current = context.user_data["current_resource"]
+    unit = RESOURCE_UNITS.get(current, "ədəd")
+    text = (f"Əgər bonus olmasaydı, 1 çalışmada nə qədər {unit} istehsal edə bilərsən?\n"
+            "(bonuslu fabrikin, bonussuz ən yaxşı fabriklə müqayisəsi üçün lazımdır)")
+    await send_numpad_prompt(update, context, "alt_production", text, prefill=prefill)
+    return COLLECT_ALT_PRODUCTION
+
+
+async def _reask_bonus_value(update, context, prefill):
+    context.user_data.pop("bonus_per_work", None)
+    text = f"Bonuslu fabrikdə 1 çalışma başına, istehsaldan əlavə, orta hesabla nə qədər ₼ bonus qazanırsan?\n{BIG_NUMBER_HINT}"
+    await send_numpad_prompt(update, context, "bonus_value", text, prefill=prefill)
+    return BONUS_VALUE
+
+
+async def _reask_price_now(update, context, prefill):
+    context.user_data.pop("current_price_now", None)
+    context.user_data["price_step"] = 0
+    await send_numpad_prompt(update, context, "price", price_now_prompt_text(context),
+                              extra_rows=SKIP_PRICE_ROW, prefill=prefill)
+    return COLLECT_PRICE
+
+
+async def _reask_price_worst(update, context, prefill):
+    context.user_data.pop("current_price_worst", None)
+    context.user_data["price_step"] = 1
+    await send_numpad_prompt(
+        update, context, "price",
+        "Bazar durğunlaşarsa minimum qiymət nə qədər olar?\n(hesablamaq istəmirsənsə aşağıdakı düyməni bas)",
+        extra_rows=SKIP_PRICE_ROW, prefill=prefill,
+    )
+    return COLLECT_PRICE
+
+
+REASK_DISPATCH = {
+    "health": _reask_health,
+    "diamonds": _reask_diamonds,
+    "pkg_diamonds": _reask_pkg_diamonds,
+    "pkg_price": _reask_pkg_price,
+    "production": _reask_production,
+    "alt_production": _reask_alt_production,
+    "bonus_value": _reask_bonus_value,
+    "price_now": _reask_price_now,
+    "price_worst": _reask_price_worst,
+}
+
+
 # ---------- Digər ----------
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -649,8 +833,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def qiymetler_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # TODO: bura icma bazar qiymətləri məntiqini bağla (hazırda placeholder-dir).
-    await update.message.reply_text("📈 Bu funksiya hazırlanır - tezliklə əlavə olunacaq.")
+    lines = ["📈 *İcma bazar qiymətləri* (istifadəçilərin bildirdiyi son dəyərlər)\n"]
+    any_data = False
+    for r in RESOURCE_ORDER:
+        stats = price_history.get_stats(context.bot_data, r)
+        if stats:
+            any_data = True
+        lines.append(price_history.format_summary_line(r, stats))
+    if not any_data:
+        lines.append("\n_Hələ heç kim qiymət bildirməyib. Hesablama zamanı daxil etdiyin qiymətlər "
+                      "avtomatik (anonim) əlavə olunur._")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def post_init(app):
@@ -685,7 +878,8 @@ def main():
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN mühit dəyişəni tapılmadı.")
 
-    app = ApplicationBuilder().token(token).post_init(post_init).build()
+    persistence = PicklePersistence(filepath=os.environ.get("BOT_PERSISTENCE_PATH", "bot_persistence.pkl"))
+    app = ApplicationBuilder().token(token).persistence(persistence).post_init(post_init).build()
 
     # "🚀 Başla" və "❌ Ləğv et" söhbətin gedişatını dəyişdiyi üçün (yeni state-ə
     # keçir/bitirir) hər state-in öz siyahısına əlavə olunur - bununla
@@ -726,11 +920,13 @@ def main():
             BONUS_YN: [CallbackQueryHandler(bonus_yn, pattern="^bonus_"), *SHORTCUTS],
             BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_"), *SHORTCUTS],
             COLLECT_PRODUCTION: [
+                CallbackQueryHandler(use_saved_production_callback, pattern="^useprod_production$"),
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
                 *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_production),
             ],
             COLLECT_ALT_PRODUCTION: [
+                CallbackQueryHandler(use_saved_production_callback, pattern="^useprod_alt_production$"),
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),
                 *SHORTCUTS,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, collect_alt_production),
@@ -753,6 +949,8 @@ def main():
             MessageHandler(filters.ALL, fallback_unrecognized),
         ],
         allow_reentry=True,
+        name="main_conversation",
+        persistent=True,
     )
 
     # "❓ Kömək" və "📈 Qiymətlər" söhbətin state-ini dəyişmir (sadəcə məlumat
