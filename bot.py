@@ -84,8 +84,14 @@ def bonus_yn_keyboard():
     ])
 
 
-def bonus_resource_keyboard(options):
-    return InlineKeyboardMarkup([[InlineKeyboardButton(r, callback_data=f"bonusres_{r}") for r in options]])
+def bonus_resource_select_keyboard(selected: set, options):
+    row = [InlineKeyboardButton(f"✅ {r}" if r in selected else r, callback_data=f"bonusres_toggle_{r}")
+           for r in options]
+    return InlineKeyboardMarkup([
+        row,
+        [InlineKeyboardButton("✅ Hamısını seç", callback_data="bonusres_all")],
+        [InlineKeyboardButton("▶️ Davam et", callback_data="bonusres_continue")],
+    ])
 
 
 def resource_select_keyboard(selected: set):
@@ -100,8 +106,8 @@ def resource_select_keyboard(selected: set):
     ])
 
 
-def resource_label(name: str, bonus_resource_name):
-    return f"bonuslu {name}" if name == bonus_resource_name else name
+def resource_label(name: str, bonus_resources):
+    return f"🎁{name}" if name in (bonus_resources or ()) else name
 
 
 def commands_keyboard():
@@ -369,22 +375,42 @@ async def bonus_yn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.data == "bonus_yes":
-        context.user_data["bonus_active"] = True
+        context.user_data["bonus_resources_selecting"] = set()
         options = context.user_data["ordered_selected"]
-        await query.edit_message_text("Bonuslu fabrik hansı resurs üzrədir?", reply_markup=bonus_resource_keyboard(options))
+        await query.edit_message_text(
+            "Bonuslu fabrik(lər) hansı resurs(lar) üzrədir? (bir və ya bir neçəsini seç)",
+            reply_markup=bonus_resource_select_keyboard(set(), options),
+        )
         return BONUS_RESOURCE
-    context.user_data["bonus_active"] = False
-    context.user_data["bonus_resource"] = None
+    context.user_data["bonus_resources"] = set()
     return await start_resource_queue(update, context)
 
 
-async def bonus_resource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def bonus_resource_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    resource = query.data.replace("bonusres_", "")
-    context.user_data["bonus_resource"] = resource
-    await query.edit_message_text(f"Bonuslu fabrik: {resource}")
-    return await start_resource_queue(update, context)
+    selected = context.user_data.setdefault("bonus_resources_selecting", set())
+    options = context.user_data["ordered_selected"]
+
+    if query.data == "bonusres_all":
+        selected.clear()
+        selected.update(options)
+    elif query.data == "bonusres_continue":
+        if not selected:
+            await query.answer("Zəhmət olmasa ən azı 1 resurs seç.", show_alert=True)
+            return BONUS_RESOURCE
+        context.user_data["bonus_resources"] = set(selected)
+        await query.edit_message_text(f"Bonuslu fabrik(lər): {' '.join(order_resources(selected))}")
+        return await start_resource_queue(update, context)
+    else:
+        r = query.data.replace("bonusres_toggle_", "")
+        if r in selected:
+            selected.discard(r)
+        else:
+            selected.add(r)
+
+    await query.edit_message_reply_markup(reply_markup=bonus_resource_select_keyboard(selected, options))
+    return BONUS_RESOURCE
 
 
 async def start_resource_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -409,7 +435,7 @@ async def ask_next_production(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["current_resource"] = current
     context.user_data["price_step"] = 0
     unit = RESOURCE_UNITS.get(current, "ədəd")
-    is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
+    is_bonus_res = current in context.user_data.get("bonus_resources", set())
     bonus_note = " (bu, bonuslu fabrikindir)" if is_bonus_res else ""
     text = f"{current}{bonus_note} üçün 1 çalışmada nə qədər {unit} istehsal olunur?"
 
@@ -427,7 +453,7 @@ async def _production_captured(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["current_production"] = value
     context.user_data.setdefault("nav_stack", []).append({"kind": "production", "value": value})
     current = context.user_data["current_resource"]
-    is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
+    is_bonus_res = current in context.user_data.get("bonus_resources", set())
     if is_bonus_res:
         unit = RESOURCE_UNITS.get(current, "ədəd")
         extra_rows = None
@@ -501,7 +527,7 @@ async def bonus_value(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_te
     if value is None:
         await update.effective_message.reply_text("⚠️ Rəqəm kimi tanınmadı. Zəhmət olmasa yenidən yaz (məs: 20000 və ya 20k).")
         return BONUS_VALUE
-    context.user_data["bonus_per_work"] = value
+    context.user_data["current_bonus_per_work"] = value
     context.user_data.setdefault("nav_stack", []).append({"kind": "bonus_value", "value": value})
     context.user_data["price_step"] = 0
     await send_numpad_prompt(
@@ -562,13 +588,16 @@ async def skip_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def finish_current_resource(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ud = context.user_data
+    is_bonus = ud["current_resource"] in ud.get("bonus_resources", set())
     resource = ResourceInput(
         name=ud["current_resource"],
         production_per_work=ud["current_production"],
         price_now=ud.get("current_price_now"),
         price_worst=ud.get("current_price_worst"),
         price_best=ud.get("current_price_best"),
+        is_bonus=is_bonus,
         alt_production_per_work=ud.get("current_alt_production"),
+        bonus_per_work_m=ud.get("current_bonus_per_work"),
     )
     ud["finished_resources"].append(resource)
     ud["queue"].pop(0)
@@ -579,7 +608,8 @@ async def finish_current_resource(update: Update, context: ContextTypes.DEFAULT_
         "alt_production": resource.alt_production_per_work,
     }
     for k in ("current_resource", "current_production", "current_price_now",
-              "current_price_worst", "current_price_best", "current_alt_production", "price_step"):
+              "current_price_worst", "current_price_best", "current_alt_production",
+              "current_bonus_per_work", "price_step"):
         ud.pop(k, None)
     if ud["queue"]:
         return await ask_next_production(update, context)
@@ -596,15 +626,12 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         use_existing_balance=ud.get("use_existing_balance", True),
         package_diamonds=ud.get("package_diamonds", 0.0),
         package_price_m=ud.get("package_price_m", 0.0),
-        bonus_active=ud.get("bonus_active", False),
-        bonus_resource_name=ud.get("bonus_resource"),
-        bonus_per_work_m=ud.get("bonus_per_work", 0.0),
         resources=ud["finished_resources"],
     )
     result = full_analysis(game_input)
     reports_by_name = {r["name"]: r for r in result["reports"]}
     cost_per_work = result["cost_per_work_m"]
-    bonus_resource_name = game_input.bonus_resource_name if game_input.bonus_active else None
+    bonus_resources = ud.get("bonus_resources", set())
 
     async def send(text):
         if update.callback_query:
@@ -625,7 +652,7 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for r in result["reports"]:
         unit = RESOURCE_UNITS.get(r["name"], "ədəd")
-        label = resource_label(r["name"], bonus_resource_name)
+        label = resource_label(r["name"], bonus_resources)
         lines = [f"{label} — NƏTİCƏ", f"↳ İstehsal: {humanize_number(r['production'])} {unit}", ""]
         if r["market_batches"] > 0:
             lines.append(f"Bazarda satmaq üçün minimum {humanize_number(r['market_batches'])} dəfə satışa qoymalısan.")
@@ -671,34 +698,40 @@ async def compute_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = ["🏁 *Yekun tövsiyə*", ""]
     if result["best_now"]:
         best = reports_by_name[result["best_now"]]["now"]
-        label = resource_label(result["best_now"], bonus_resource_name)
+        label = resource_label(result["best_now"], bonus_resources)
         summary.append(f"🏆 İndiki qiymətlərlə ən sərfəli: {label}")
         summary.append(f"({humanize_m(best['net_income_m'])} xalis qazanc)")
         summary.append("")
     if result["best_worst"]:
         best = reports_by_name[result["best_worst"]]["worst"]
-        label = resource_label(result["best_worst"], bonus_resource_name)
+        label = resource_label(result["best_worst"], bonus_resources)
         summary.append(f"🔻 Bazar durğunlaşarsa ən sərfəli: {label}")
         summary.append(f"({humanize_m(best['net_income_m'])})")
         summary.append("")
     if result["best_best"]:
         best = reports_by_name[result["best_best"]]["best"]
-        label = resource_label(result["best_best"], bonus_resource_name)
+        label = resource_label(result["best_best"], bonus_resources)
         summary.append(f"🔺 Bazar hərəkətlənərsə ən sərfəli: {label}")
         summary.append(f"({humanize_m(best['net_income_m'])})")
         summary.append("")
-    if bonus_resource_name and bonus_resource_name in reports_by_name:
-        bonus_rep = reports_by_name[bonus_resource_name]
-        if "alt" in bonus_rep:
-            diff = bonus_rep["alt"]["diff_net_m"]
-            if diff >= 0:
-                summary.append(f"Bonuslu {bonus_resource_name} fabriki")
-                summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(diff)} çox qazandırır.")
-            else:
-                summary.append(f"Bonuslu {bonus_resource_name} fabriki")
-                summary.append(f"ən yaxşı adi {bonus_resource_name} fabrikindən")
-                summary.append(f"{humanize_m(abs(diff))} qazandırır.")
+    bonus_reports = [reports_by_name[r] for r in bonus_resources if r in reports_by_name and reports_by_name[r].get("has_price")]
+
+    for r in bonus_reports:
+        if "alt" in r:
+            diff = r["alt"]["diff_net_m"]
+            verb = "çox" if diff >= 0 else "az"
+            summary.append(f"🎁 Bonuslu {r['name']} fabriki bonussuz olsaydı, {humanize_m(abs(diff))} {verb} qazandırardı.")
+            summary.append("")
+
+    if len(bonus_reports) >= 2:
+        ranked = sorted(bonus_reports, key=lambda r: r["now"]["net_income_m"], reverse=True)
+        summary.append("🎁 *Bonuslu fabriklərin öz aralarında müqayisəsi*")
+        summary.append("")
+        for i, r in enumerate(ranked, 1):
+            summary.append(f"{i}. {r['name']} — {humanize_m(r['now']['net_income_m'])} xalis qazanc")
+        summary.append("")
+        summary.append(f"👉 Bonuslu fabriklər arasında ən sərfəlisi: {ranked[0]['name']}")
+
     await send("\n".join(summary))
 
     restart_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Yenidən başla", callback_data="restart")]])
@@ -738,7 +771,7 @@ async def _reask_production(update, context, prefill):
     context.user_data.pop("current_production", None)
     current = context.user_data["current_resource"]
     unit = RESOURCE_UNITS.get(current, "ədəd")
-    is_bonus_res = context.user_data.get("bonus_active") and context.user_data.get("bonus_resource") == current
+    is_bonus_res = current in context.user_data.get("bonus_resources", set())
     bonus_note = " (bu, bonuslu fabrikindir)" if is_bonus_res else ""
     text = f"{current}{bonus_note} üçün 1 çalışmada nə qədər {unit} istehsal olunur?"
     await send_numpad_prompt(update, context, "production", text, prefill=prefill)
@@ -756,7 +789,7 @@ async def _reask_alt_production(update, context, prefill):
 
 
 async def _reask_bonus_value(update, context, prefill):
-    context.user_data.pop("bonus_per_work", None)
+    context.user_data.pop("current_bonus_per_work", None)
     text = f"Bonuslu fabrikdə 1 çalışma başına, istehsaldan əlavə, orta hesabla nə qədər ₼ bonus qazanırsan?\n{BIG_NUMBER_HINT}"
     await send_numpad_prompt(update, context, "bonus_value", text, prefill=prefill)
     return BONUS_VALUE
@@ -918,7 +951,7 @@ def main():
             ],
             RESOURCE_SELECT: [CallbackQueryHandler(resource_toggle, pattern="^res_"), *SHORTCUTS],
             BONUS_YN: [CallbackQueryHandler(bonus_yn, pattern="^bonus_"), *SHORTCUTS],
-            BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource, pattern="^bonusres_"), *SHORTCUTS],
+            BONUS_RESOURCE: [CallbackQueryHandler(bonus_resource_toggle, pattern="^bonusres_"), *SHORTCUTS],
             COLLECT_PRODUCTION: [
                 CallbackQueryHandler(use_saved_production_callback, pattern="^useprod_production$"),
                 CallbackQueryHandler(numpad_callback, pattern="^np_"),

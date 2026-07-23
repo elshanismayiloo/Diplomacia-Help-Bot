@@ -43,8 +43,11 @@ class ResourceInput:
     price_now: Optional[float] = None
     price_worst: Optional[float] = None
     price_best: Optional[float] = None
-    # Yalnız bonuslu resurs üçün: bonus olmasaydı istehsalın nə qədər olacağı.
+    is_bonus: bool = False
+    # Yalnız bonuslu resurs üçün: bonus olmasaydı istehsalın nə qədər olacağı,
+    # və 1 çalışma başına əlavə ₼ bonus (istehsaldan asılı olmayaraq).
     alt_production_per_work: Optional[float] = None
+    bonus_per_work_m: Optional[float] = None
 
 
 @dataclass
@@ -54,9 +57,6 @@ class GameInput:
     use_existing_balance: bool = True
     package_diamonds: float = 0.0
     package_price_m: float = 0.0
-    bonus_active: bool = False
-    bonus_resource_name: Optional[str] = None
-    bonus_per_work_m: float = 0.0  # bonuslu fabrikdə 1 çalışma başına əlavə ₼ (istehsaldan asılı olmayaraq)
     resources: list = field(default_factory=list)  # list[ResourceInput]
 
 
@@ -119,12 +119,11 @@ def net_multiple(net_income_m: float, cost_m: float) -> Optional[float]:
     return net_income_m / cost_m
 
 
-def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float,
-                     bonus_active: bool, bonus_resource_name: Optional[str], bonus_per_work_m: float):
+def resource_report(resource: ResourceInput, works: int, cost_per_work_m: float):
     production = round(resource.production_per_work * works, 2)
-    is_bonus = bonus_active and resource.name == bonus_resource_name
+    is_bonus = resource.is_bonus
     total_cost = round(cost_per_work_m * works, 2)
-    bonus_income = works * bonus_per_work_m if is_bonus else 0.0
+    bonus_income = works * (resource.bonus_per_work_m or 0.0) if is_bonus else 0.0
 
     def calc_for_price(price, prod, include_bonus=False):
         gross_income = prod * price + (bonus_income if include_bonus else 0.0)
@@ -265,9 +264,7 @@ def full_analysis(game_input: GameInput):
 
     reports = []
     for res in game_input.resources:
-        rep = resource_report(res, works, cost_per_work,
-                               game_input.bonus_active, game_input.bonus_resource_name,
-                               game_input.bonus_per_work_m)
+        rep = resource_report(res, works, cost_per_work)
         rep["min_sale_price"] = minimal_sale_price(cost_per_work, res.production_per_work)
         reports.append(rep)
 
